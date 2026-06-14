@@ -280,10 +280,12 @@ play** stays outside the live engine (~ms/decision); it lives in `ceiling`.
   negative counts roughly doubles the edge per hand played; sitting out too aggressively
   costs throughput for little extra edge.
 - **The whole stack vs a real casino.** A player using everything (Hi-Lo + full I18 +
-  wonging + half-Kelly off a finite roll) at a 6-deck table with a casino shuffle and a
-  live pit: ≈ 47% still grinding a profit, ≈ 20% barred, ≈ 33% broke, median career near
-  breakeven (`make_figures.py --only practical_player`). The edge is real and the living
-  is hard.
+  wonging + a modest 1–8 spread off a 300-unit roll) at a 6-deck table with a casino
+  shuffle and a live pit: ≈ 61% still grinding a profit, ≈ 21% barred (and leaving ~29
+  units ahead), ≈ 17% broke. Median and mean career both finish ≈ 324 units, a +24 (8%)
+  profit (`make_figures.py --only practical_player`). The edge is real and shows through
+  on average — but a sixth still bust and a fifth get barred, so it stays a hard, swingy
+  way to earn.
 
 ## Caveats
 

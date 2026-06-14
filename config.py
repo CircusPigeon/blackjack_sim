@@ -52,6 +52,7 @@ class Config:
     heat_threshold: float = 2.0       # tolerated ramp slope (units per true count)
     heat_warmup: int = 25             # hands the pit observes before it can act
     heat_rate: float = 0.12           # per-hand back-off probability once flagged
+    heat_width: float = 0.5           # softness of the threshold (scale with the bet unit)
     heat_maxHands: int = 2000         # session length cap (heat experiment)
 
     # bankroll / risk of ruin

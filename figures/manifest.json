@@ -420,10 +420,6 @@
       "8 decks": {
         "P(tc>=+1)": 0.2315,
         "P(tc>=+3)": 0.059
-      },
-      "6 decks, CSM": {
-        "P(tc>=+1)": 0.0,
-        "P(tc>=+3)": 0.0
       }
     },
     "files": [
@@ -437,57 +433,70 @@
   "profit_by_count": {
     "description": "Profit share by true-count bin (where the money lives)",
     "numbers": {
-      "share_from_tc_ge_3": 166.8,
+      "share_from_tc_ge_3": 174.1,
       "hands_at_tc_ge_3_pct": 7.7,
-      "share_from_tc_lt_1": -90.9,
+      "share_from_tc_lt_1": -100.4,
+      "trials": 360,
       "per_bin": {
         "-5": {
-          "share_pct": -21.95,
-          "freq_pct": 5.39
+          "win_per_1000": -1.89,
+          "win_ci": 0.147,
+          "freq_pct": 5.37
         },
         "-4": {
-          "share_pct": -11.08,
-          "freq_pct": 4.13
+          "win_per_1000": -0.852,
+          "win_ci": 0.12,
+          "freq_pct": 4.11
         },
         "-3": {
-          "share_pct": -12.1,
-          "freq_pct": 6.97
+          "win_per_1000": -1.208,
+          "win_ci": 0.158,
+          "freq_pct": 6.96
         },
         "-2": {
-          "share_pct": -15.07,
-          "freq_pct": 12.59
+          "win_per_1000": -1.508,
+          "win_ci": 0.216,
+          "freq_pct": 12.62
         },
         "-1": {
-          "share_pct": -21.13,
-          "freq_pct": 19.11
+          "win_per_1000": -1.685,
+          "win_ci": 0.263,
+          "freq_pct": 19.14
         },
         "0": {
-          "share_pct": -9.61,
-          "freq_pct": 26.44
+          "win_per_1000": -0.937,
+          "win_ci": 0.302,
+          "freq_pct": 26.45
         },
         "1": {
-          "share_pct": 4.93,
-          "freq_pct": 11.44
+          "win_per_1000": 0.658,
+          "win_ci": 0.415,
+          "freq_pct": 11.42
         },
         "2": {
-          "share_pct": 19.25,
-          "freq_pct": 6.2
+          "win_per_1000": 1.459,
+          "win_ci": 0.615,
+          "freq_pct": 6.19
         },
         "3": {
-          "share_pct": 31.15,
+          "win_per_1000": 3.049,
+          "win_ci": 0.677,
           "freq_pct": 3.45
         },
         "4": {
-          "share_pct": 38.03,
-          "freq_pct": 1.95
+          "win_per_1000": 3.103,
+          "win_ci": 0.687,
+          "freq_pct": 1.94
         },
         "5": {
-          "share_pct": 31.42,
-          "freq_pct": 1.08
+          "win_per_1000": 2.712,
+          "win_ci": 0.639,
+          "freq_pct": 1.09
         },
         "6": {
-          "share_pct": 66.15,
-          "freq_pct": 1.25
+          "win_per_1000": 5.143,
+          "win_ci": 0.767,
+          "freq_pct": 1.26
         }
       }
     },
@@ -495,7 +504,7 @@
       "figures\\profit_by_count.svg",
       "figures\\profit_by_count.png"
     ],
-    "trials": 90,
+    "trials": 360,
     "rounds": 40000,
     "smoke": false
   },
@@ -549,11 +558,14 @@
   "practical_player": {
     "description": "Capstone: the full practical stack vs the casino",
     "numbers": {
-      "p_ruined": 0.333,
-      "p_barred": 0.2,
-      "p_survived": 0.467,
-      "median_final_bankroll": 298.0,
-      "median_hands_survived": 1757,
+      "p_ruined": 0.173,
+      "p_barred": 0.213,
+      "p_survived": 0.613,
+      "median_final_bankroll": 324.2,
+      "mean_final_bankroll": 323.5,
+      "mean_final_barred": 328.7,
+      "mean_final_survived": 371.4,
+      "median_hands_survived": 1969,
       "careers": 300,
       "session_hands": 3000,
       "bankroll_units": 300.0

@@ -61,7 +61,7 @@ class Blackjack:
         self.heatLive = self.config.heat_live
         self.bankrollLive = self.config.bankroll_live
         self.heatAlpha = 0.04
-        self.heatWidth = 0.5
+        self.heatWidth = self.config.heat_width
         self.heatBase = self.config.heat_rate
         self.heatWarmup = self.config.heat_warmup
         self.act = [True] * self.numPlaying

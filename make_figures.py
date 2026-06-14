@@ -56,7 +56,7 @@ HEAVY = {"shuffle_tracking": 0.5, "dummy_players": 0.6, "edge_crossover": 2.5,
 # The bumped counts below trade a slower full regen for visibly tighter CIs.
 SPEC_TRIALS = {"dummy_players": 5.0, "shuffle_tracking": 4.0, "edge_crossover": 0.6,
                "deviation_value": 6.0, "kills_counting": 3.0,
-               "profit_by_count": 3.0, "wonging": 2.0, "practical_player": 10.0}
+               "profit_by_count": 12.0, "wonging": 2.0, "practical_player": 10.0}
 
 # Realistic advantage-player bet spread used across the counting figures: a 1-to-12
 # ramp climbing 2 units per true count from TC +1 (so it reaches the cap ~TC +6).
@@ -483,9 +483,9 @@ def exp_kills_counting(trials, rounds):
 
 def exp_tc_distribution(trials, rounds):
     """Why fewer decks help: the distribution of the true count at bet time, by
-    deck count, plus a CSM. With one deck the count swings hard and often visits
-    the profitable region; a 6-deck shoe barely leaves zero; a CSM is pinned at
-    exactly zero, which is the whole reason it kills counting."""
+    deck count. With one deck the count swings hard and often visits the
+    profitable region; a 6- or 8-deck shoe barely leaves zero. (A CSM would be a
+    single spike at exactly zero; left off so the deck curves keep their scale.)"""
     import random
     from blackjack import Blackjack
 
@@ -494,7 +494,6 @@ def exp_tc_distribution(trials, rounds):
         ("2 decks", dict(numPacks=2), "#e67e22"),
         ("6 decks", dict(numPacks=6), "#2980b9"),
         ("8 decks", dict(numPacks=8), "#34495e"),
-        ("6 decks, CSM", dict(numPacks=6, shuffle="csm"), "#7f8c8d"),
     ]
     tr = max(4, trials // 3)
     n = max(rounds * 2, 20000) if not SMOKE else rounds
@@ -538,6 +537,11 @@ def exp_tc_distribution(trials, rounds):
     A._style(ax, "Why fewer decks help: how far the true count wanders",
              "true count at bet time (75% penetration; ends clipped to +/-8)",
              "fraction of hands")
+    import matplotlib.ticker as mticker
+    ax.yaxis.set_major_locator(mticker.MultipleLocator(0.05))
+    ax.set_ylim(bottom=0)
+    ax.set_axisbelow(True)
+    ax.grid(axis="y", ls=":", color="0.75", lw=0.7)
     ax.legend(fontsize=10)
     return [("tc_distribution", fig)], nums
 
@@ -550,10 +554,15 @@ def exp_profit_by_count(trials, rounds):
     import random
     from blackjack import Blackjack
 
+    # Plot the NET WIN per 1000 hands contributed by each count bin (a sum, so it
+    # has a clean mean and CI), not the share of total profit (a ratio with a
+    # noisy denominator that explodes the error bars). The bins sum to the total
+    # edge per 1000 hands; the share-of-profit headline is reported in nums.
     lo, hi = -5, 6
-    prof = {b: 0.0 for b in range(lo, hi + 1)}
-    cnt = {b: 0 for b in range(lo, hi + 1)}
-    total_rounds = 0
+    xs = list(range(lo, hi + 1))
+    idx = {b: k for k, b in enumerate(xs)}
+    contrib, freqs = [], []
+    pool_prof = np.zeros(len(xs))
     for t in range(trials):
         random.seed(600 + t)
         cfg = Config(experiment="game", strategies=("COUNT",), numPacks=6,
@@ -565,35 +574,41 @@ def exp_profit_by_count(trials, rounds):
         tc = np.asarray(bj.records["true_count"], float)
         res = np.asarray(bj.records["result"], float) / unit
         bk = np.clip(np.floor(tc).astype(int), lo, hi)
-        for b in range(lo, hi + 1):
-            m = bk == b
-            prof[b] += float(res[m].sum())
-            cnt[b] += int(m.sum())
-        total_rounds += rounds
+        pt = np.array([res[bk == b].sum() for b in xs])
+        ct = np.array([float((bk == b).sum()) for b in xs])
+        contrib.append(1000.0 * pt / rounds)         # units won per 1000 hands dealt
+        freqs.append(100.0 * ct / ct.sum())
+        pool_prof += pt
+    contrib = np.array(contrib)
+    freqs = np.array(freqs)
+    win = contrib.mean(0)
+    win_ci = 1.96 * contrib.std(0, ddof=1) / np.sqrt(trials)
+    freq = freqs.mean(0)
 
-    xs = list(range(lo, hi + 1))
-    total = sum(prof.values())
-    share = [100.0 * prof[b] / total for b in xs]
-    freq = [100.0 * cnt[b] / total_rounds for b in xs]
     fig = A._new_figure(figsize=(8.6, 5.2))
     ax = fig.add_subplot(111)
     ax.axhline(0, color="0.5", lw=0.8)
-    ax.bar(xs, share, color=["#c0392b" if s < 0 else "#1a9850" for s in share])
+    ax.bar(xs, win, yerr=win_ci, capsize=4, ecolor="0.3",
+           color=["#c0392b" if w < 0 else "#1a9850" for w in win])
     ax.set_xticks(xs)
-    A._style(ax, "Where the money comes from: profit share by true count (Hi-Lo, 6 decks)",
-             "true count bin (floor)", "share of total net profit (%)")
+    A._style(ax, "Where the money comes from: net win by true count (Hi-Lo, 6 decks)",
+             "true count bin (floor)", "net win per 1,000 hands (units, 95% CI)")
     ax2 = ax.twinx()
     ax2.plot(xs, freq, "o--", color="#2980b9", lw=1.4, markersize=4)
     ax2.set_ylabel("% of hands dealt at this count", fontsize=12, color="#2980b9")
     ax2.tick_params(axis="y", colors="#2980b9", labelsize=10)
-    hi_share = sum(100.0 * prof[b] / total for b in xs if b >= 3)
-    hi_freq = sum(100.0 * cnt[b] / total_rounds for b in xs if b >= 3)
-    neg_share = sum(100.0 * prof[b] / total for b in xs if b < 1)
+    ax2.set_ylim(bottom=0)
+
+    total = float(pool_prof.sum())
+    hi_share = 100.0 * float(pool_prof[[idx[b] for b in xs if b >= 3]].sum()) / total
+    neg_share = 100.0 * float(pool_prof[[idx[b] for b in xs if b < 1]].sum()) / total
+    hi_freq = float(freq[[idx[b] for b in xs if b >= 3]].sum())
     nums = {"share_from_tc_ge_3": round(hi_share, 1), "hands_at_tc_ge_3_pct": round(hi_freq, 1),
-            "share_from_tc_lt_1": round(neg_share, 1),
-            "per_bin": {str(b): {"share_pct": round(100.0 * prof[b] / total, 2),
-                                 "freq_pct": round(100.0 * cnt[b] / total_rounds, 2)} for b in xs}}
-    print("    TC>=+3: %.1f%% of profit from %.1f%% of hands; TC<+1 hands net %.1f%%"
+            "share_from_tc_lt_1": round(neg_share, 1), "trials": trials,
+            "per_bin": {str(b): {"win_per_1000": round(float(win[idx[b]]), 3),
+                                 "win_ci": round(float(win_ci[idx[b]]), 3),
+                                 "freq_pct": round(float(freq[idx[b]]), 2)} for b in xs}}
+    print("    TC>=+3: %.0f%% of profit from %.1f%% of hands; TC<+1 hands net %.0f%%"
           % (hi_share, hi_freq, neg_share), flush=True)
     return [("profit_by_count", fig)], nums
 
@@ -669,33 +684,43 @@ def exp_practical_player(trials, rounds):
     from blackjack import Blackjack
 
     sess = R(3000, 300)               # table rounds per simulated career
-    B0 = 300.0                        # starting bankroll, units (1 unit = table min)
+    UNIT = 10                         # $ per unit; keep bets >= 10 so insurance and
+    B0 = 300.0                        # other integer-money ops stay exact (a 1-unit
+    ruin = 0.5 * B0                   # bet would make insurance = 1//2 = 0, etc.)
     step = max(1, sess // 300)
     trajs, fates, finals, survived = [], [], [], []
     for t in range(trials):
         random.seed(800 + t)
+        # A slightly gentler spread than the other figures (1-8, slope 1.5): lower
+        # variance keeps fewer careers from busting, so the real edge survives in
+        # the mean. A barred player keeps the chips they had at barring (recorded
+        # in finals below), so their profit counts toward the average.
+        # Heat threshold/width are in $-slope units, so they scale with UNIT: the
+        # 1-8 spread's bet-vs-count slope lands near ~14 at UNIT=10, so a sharp
+        # threshold just below it bars the careers that ramp most steeply.
         cfg = Config(experiment="game", strategies=("WONG",), numPacks=6,
                      rounds=sess, seed=800 + t, shuffle="casino", dummyPlayers=2,
-                     wong_below=-1.0, heat_live=True,
-                     heat_threshold=4.5, heat_rate=0.08, **SPREAD)
+                     wong_below=-1.0, heat_live=True, heat_threshold=13.8,
+                     heat_width=0.5, heat_rate=0.10,
+                     spread_min=1, spread_max=8, ramp_start=1.0, spread_slope=1.5)
         bj = Blackjack(cfg, record=False)
         g = bj.guests[0]
-        g.unit = 1                    # bet in units so the bankroll is in units
-        g.money = B0
-        g.startMoney = B0
+        g.unit = UNIT
+        g.money = B0 * UNIT
+        g.startMoney = B0 * UNIT
         ruined = False
         path = [B0]
         for i in range(sess):
             bj.run()
             if ((i + 1) % step == 0):
-                path.append(g.money)
-            if (g.money <= 0.5 * B0):
+                path.append(g.money / UNIT)
+            if (g.money <= ruin * UNIT):
                 ruined = True         # lost half the roll: walks away broke
                 break
             if (g.out):
                 break
         trajs.append(np.array(path))
-        finals.append(g.money)
+        finals.append(g.money / UNIT)
         survived.append(g.handsPlayed)
         fates.append("ruined" if ruined else ("barred" if g.barred else "survived"))
         if ((t + 1) % 25 == 0):
@@ -725,13 +750,30 @@ def exp_practical_player(trials, rounds):
     A._style(ax, "The practical player: full stack vs a casino that fights back",
              "hands into the career (session ends when barred or broke)",
              "bankroll (units, log scale)")
+    finals_a = np.array(finals, float)
+    fates_a = np.array(fates)
+    med, mean = float(np.median(finals_a)), float(np.mean(finals_a))
+    def fate_mean(f):
+        sel = fates_a == f
+        return float(finals_a[sel].mean()) if sel.any() else float("nan")
+    barred_mean = fate_mean("barred")
+    pnl = mean - B0
+    tag = "breakeven" if abs(pnl) < 0.02 * B0 else ("+%.0f profit" % pnl if pnl > 0 else "%.0f loss" % pnl)
+    ax.text(0.985, 0.045,
+            "start  %.0f units\nmedian end  %.0f\nmean end  %.0f  (%s)\nbarred avg  %.0f" % (B0, med, mean, tag, barred_mean),
+            transform=ax.transAxes, ha="right", va="bottom", fontsize=10, color="0.15",
+            bbox=dict(boxstyle="round,pad=0.5", facecolor="white", edgecolor="0.6", alpha=0.9))
     nums = {"p_ruined": round(p_ruin, 3), "p_barred": round(p_barred, 3),
             "p_survived": round(p_surv, 3),
-            "median_final_bankroll": round(float(np.median(finals)), 1),
+            "median_final_bankroll": round(med, 1),
+            "mean_final_bankroll": round(mean, 1),
+            "mean_final_barred": round(barred_mean, 1),
+            "mean_final_survived": round(fate_mean("survived"), 1),
             "median_hands_survived": int(np.median(survived)),
             "careers": int(n), "session_hands": sess, "bankroll_units": B0}
-    print("    ruined %.0f%%  barred %.0f%%  survived %.0f%%  median final %.0f units"
-          % (100 * p_ruin, 100 * p_barred, 100 * p_surv, np.median(finals)), flush=True)
+    print("    ruined %.0f%%  barred %.0f%%  survived %.0f%%  median final %.0f  mean final %.0f (start %.0f)"
+          % (100 * p_ruin, 100 * p_barred, 100 * p_surv,
+             np.median(finals), np.mean(finals), B0), flush=True)
     return [("practical_player", fig)], nums
 
 
