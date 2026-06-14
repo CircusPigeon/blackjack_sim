@@ -5,6 +5,30 @@ runner measures basic strategy, card counting, shuffle tracking, the casino
 detection ("heat") game, bankroll risk-of-ruin, and the composition-exact
 theoretical ceiling.
 
+## Key results (TL;DR)
+
+- **Basic strategy loses (≈ −0.5%); Hi-Lo counting flips it positive.** A continuous
+  shuffler zeroes the count, and 6:5 payouts (≈ −1.3%) sink the game past what
+  counting can recover.
+- **Hi-Lo already sits at the betting ceiling.** Its betting correlation is 0.96 vs
+  1.00 for the effect-of-removal–optimal weights, and the edge-by-count curves
+  overlap — because the betting edge really *is* linear in shoe composition: a
+  flexible nonlinear predictor adds no out-of-sample power over the best linear count.
+- **…but Hi-Lo is nowhere near the playing ceiling.** Composition-perfect play beats
+  basic by ≈ +0.11%/hand off the top, rising to ≈ +0.52% deep in the shoe; the full
+  Illustrious 18 captures only ≈ 1/7 of that. *Betting is linear and a simple count
+  nails it; playing is nonlinear and no linear count comes close.*
+- **Profit hides in rare hands.** For a spreading counter, hands at true count ≥ +3
+  are < 8% of all hands but supply ~170% of net profit — and those few big bets are
+  exactly what the pit watches.
+- **The whole stack vs a real casino:** Hi-Lo + the full I18 + wonging + a modest 1–8
+  spread off a 300-unit roll, at a 6-deck table with a real casino shuffle and a live
+  pit → ≈ 61% grind out a profit, ≈ 21% get barred, ≈ 17% go broke; median and mean
+  career both finish ≈ 324 units (+8%). The edge is real on average, but a sixth still
+  bust and a fifth get barred.
+
+Full numbers, methods, and 95% confidence intervals in [Selected findings](#selected-findings) below.
+
 ## Run it yourself
 
 Python 3.9+ on Windows, macOS, or Linux.
