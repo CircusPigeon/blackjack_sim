@@ -577,5 +577,43 @@
     "trials": 300,
     "rounds": 40000,
     "smoke": false
+  },
+  "n0": {
+    "description": "N0: how long until the edge beats the variance (by deck count)",
+    "numbers": {
+      "hands_per_hour": 100,
+      "spread": "1-16, slope 3",
+      "decks_1": {
+        "n0": 4000,
+        "hours": 40,
+        "win_rate_per_100": 11.71,
+        "edge_pct": 3.01
+      },
+      "decks_2": {
+        "n0": 9000,
+        "hours": 90,
+        "win_rate_per_100": 6.84,
+        "edge_pct": 2.07
+      },
+      "decks_4": {
+        "n0": 35900,
+        "hours": 359,
+        "win_rate_per_100": 2.71,
+        "edge_pct": 1.05
+      },
+      "decks_6": {
+        "n0": 58800,
+        "hours": 588,
+        "win_rate_per_100": 1.77,
+        "edge_pct": 0.8
+      }
+    },
+    "files": [
+      "figures\\n0_by_decks.svg",
+      "figures\\n0_by_decks.png"
+    ],
+    "trials": 30,
+    "rounds": 40000,
+    "smoke": false
   }
 }

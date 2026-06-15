@@ -247,6 +247,67 @@ def exp_bankroll_paths(trials, rounds):
     return [("bankroll_paths", fig)], nums
 
 
+def exp_n0(trials, rounds):
+    """How long until the edge actually shows? N0 = the number of hands at which
+    expected profit equals one standard deviation of results -- the point where a
+    winning player is first reliably (~84%) ahead. It scales as variance / edge^2,
+    so the real lever is game selection: a rich 1-2 deck game has a fat edge and a
+    short N0, while a deep 6-deck shoe is thin and a long grind. A realistic 1-16
+    spread throughout; only the deck count changes. Thinner games need more hands
+    to estimate (N0 IS the sample size needed to see the edge), so the run length
+    scales up with deck count."""
+    from experiment import run_experiment
+
+    HANDS_PER_HR = 100                                   # a brisk heads-up shoe pace
+    decks = [1, 2, 4, 6]
+    rnd_by_deck = {1: R(300000, 2000), 2: R(500000, 2000),
+                   4: R(1000000, 2000), 6: R(1500000, 2000)}
+
+    def measure(npacks):
+        g = run_experiment(Config(rounds=rnd_by_deck[npacks], strategies=("COUNT",), shuffle="random",
+                                  numPacks=npacks, spread_min=1, spread_max=16,
+                                  ramp_start=1.0, spread_slope=3.0), record=True)
+        unit = float(getattr(g, "unit", 10.0))           # records are in $ (unit x units); normalize to units
+        res = np.asarray(g.records["result"], float) / unit
+        bet = np.asarray(g.records["bet"], float) / unit
+        ev = float(res.mean())
+        n0 = (float(res.std()) / ev) ** 2 if ev > 0 else float("inf")
+        return {"ev": ev, "n0": n0, "edge_bw": float(res.sum() / bet.sum())}
+
+    data = {d: measure(d) for d in decks}
+
+    x = np.arange(len(decks))
+    n0v = [data[d]["n0"] if np.isfinite(data[d]["n0"]) else np.nan for d in decks]
+    wr = [data[d]["ev"] * 100 for d in decks]
+    fig = A._new_figure(figsize=(8.6, 5.2))
+    ax = fig.add_subplot(111)
+    ax.bar(x, n0v, 0.55, color="#8e44ad")
+    ax.set_yscale("log")
+    ax.set_xticks(x)
+    ax.set_xticklabels(["%d deck%s" % (d, "" if d == 1 else "s") for d in decks], fontsize=11)
+    for xi, v in zip(x, n0v):                            # label each bar with its N0
+        if np.isfinite(v):
+            ax.annotate("{:,}".format(int(round(v, -2))), xy=(xi, v), xytext=(0, 4),
+                        textcoords="offset points", ha="center", fontsize=9.5, color="#5b2c80")
+    A._style(ax, "Game selection is the lever: fewer decks, a far shorter grind",
+             "shoe size (Hi-Lo, 1–16 spread, 75% pen)", "N0 (hands to 1-SD significance, log scale)")
+    ax2 = ax.twinx()
+    ax2.plot(x, wr, "o--", color="#27ae60", lw=1.7)
+    ax2.set_ylabel("win rate (units per 100 hands)", fontsize=12, color="#27ae60")
+    ax2.tick_params(axis="y", colors="#27ae60", labelsize=10)
+    ax2.set_ylim(0, max(wr) * 1.3)
+
+    def _i(v):
+        return int(round(v, -2)) if np.isfinite(v) else None
+    nums = {"hands_per_hour": HANDS_PER_HR, "spread": "1-16, slope 3"}
+    for d in decks:
+        nums["decks_%d" % d] = {"n0": _i(data[d]["n0"]),
+                                "hours": int(round(data[d]["n0"] / HANDS_PER_HR)) if np.isfinite(data[d]["n0"]) else None,
+                                "win_rate_per_100": round(data[d]["ev"] * 100, 2),
+                                "edge_pct": round(data[d]["edge_bw"] * 100, 2)}
+    return [("n0_by_decks", fig)], nums
+
+
 def exp_ceiling(trials, rounds):
     """The PLAYING ceiling: how much composition-perfect play beats basic strategy,
     versus how little of that a Hi-Lo counter's deviations (what COUNT and ORACLE
@@ -1065,6 +1126,7 @@ def exp_edge_crossover(trials, rounds):
 FIGURES = {
     "bankroll": (exp_bankroll, "Risk of ruin vs Kelly fraction"),
     "bankroll_paths": (exp_bankroll_paths, "Bankroll trajectories: half vs full Kelly"),
+    "n0": (exp_n0, "N0: how long until the edge beats the variance (by deck count)"),
     "heat": (exp_heat, "Detection trade-off + optimal ramp vs spread cap"),
     "oracle_vs_count": (exp_oracle_vs_count, "Hi-Lo sits at the linear betting ceiling"),
     "linear_counts": (exp_linear_counts, "Hi-Lo vs Griffin vs engine-EoR weights"),
