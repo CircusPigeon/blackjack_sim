@@ -52,6 +52,40 @@ def summary(records):
     return rows
 
 
+def summary_stats(records):
+    """Per-strategy stats with a 95% confidence interval on the edge and the win
+    rate in units. A single run's edge is a noisy estimate, and the CI says how
+    noisy: edge = sum(result)/sum(bet), and Var(sum result) ~ hands * var(result),
+    so SE(edge%) = 100 * sd(result) / (mean_bet * sqrt(hands)).
+
+    Returns a list of dicts: strategy, wagered, profit, edge (%), ci (95% half-
+    width, %), win100 (units per 100 hands), hands. Bets/results are in dollars
+    (unit x units); the unit is the smallest positive bet, so win100 is in units."""
+    n = num_rows(records)
+    pos = [records["bet"][i] for i in range(n) if records["bet"][i] > 0]
+    unit = min(pos) if pos else 1.0
+    acc = {}
+    for i in range(n):
+        s = records["strategy"][i]
+        d = acc.setdefault(s, [0.0, 0.0, 0.0, 0])     # bet, result, result^2, hands
+        r = records["result"][i]
+        d[0] += records["bet"][i]
+        d[1] += r
+        d[2] += r * r
+        d[3] += 1
+    out = []
+    for s, (wagered, profit, res2, hands) in acc.items():
+        edge = (100.0 * profit / wagered) if wagered else 0.0
+        mean_bet = (wagered / hands) if hands else 0.0
+        var_res = (res2 / hands - (profit / hands) ** 2) if hands else 0.0
+        se = (100.0 * math.sqrt(max(var_res, 0.0)) / (mean_bet * math.sqrt(hands))) \
+            if (mean_bet > 0 and hands > 0) else 0.0
+        win100 = (100.0 * (profit / hands) / unit) if (hands and unit) else 0.0
+        out.append({"strategy": s, "wagered": wagered, "profit": profit, "edge": edge,
+                    "ci": 1.96 * se, "win100": win100, "hands": hands})
+    return out
+
+
 def edge_by_true_count(records, strategy, lo=-5, hi=10):
     """Bucket rounds by floor(true count) and return (bucket, hands, edge%).
 
@@ -201,6 +235,44 @@ def fig_edge_rows(edge_rows, hero):
     return fig
 
 
+def fig_edge_rows_multi(rows_by_strategy, title="Player edge by true count"):
+    """Overlay edge-by-true-count for several strategies on one axes (as lines, so
+    they don't fight for the same bars). rows_by_strategy: {strategy: [(bucket,
+    hands, edge%), ...]}."""
+    fig = _new_figure()
+    if (fig is None or not rows_by_strategy):
+        return None
+    ax = fig.add_subplot(111)
+    ax.axhline(0, color="0.5", lw=0.8)
+    plotted = 0
+    for strat, rows in rows_by_strategy.items():
+        data = _drop_sparse(rows) if rows else None
+        if (not data):
+            continue
+        ax.plot([d[0] for d in data], [d[2] for d in data], marker="o", lw=1.6, label=strat)
+        plotted += 1
+    if (plotted == 0):
+        return None
+    _style(ax, title, "true count (bucket)", "edge %  (above 0 = player favored)")
+    ax.legend(fontsize=11)
+    return fig
+
+
+def fig_param_sweep(param_label, xs, series, ylabel="player edge %"):
+    """Plot a metric against a swept parameter, one line per strategy.
+    series: {strategy: [y aligned with xs]}."""
+    fig = _new_figure()
+    if (fig is None or not xs):
+        return None
+    ax = fig.add_subplot(111)
+    ax.axhline(0, color="0.5", lw=0.8)
+    for strat, ys in series.items():
+        ax.plot(xs, ys, marker="o", lw=1.8, label=strat)
+    _style(ax, "Edge vs " + param_label, param_label, ylabel)
+    ax.legend(fontsize=11)
+    return fig
+
+
 def fig_bankroll(records):
     fig = _new_figure()
     if (fig is None):
@@ -220,41 +292,61 @@ def fig_bankroll(records):
     return fig
 
 
-def fig_survival(hands_by_strategy):
+def fig_survival(hands_by_strategy, cause="leaving the table"):
+    """`cause` names what ends a session (barring from heat, going broke from the
+    bankroll layer, or both) so the title matches what is actually being simulated
+    -- barring only happens with live heat, ruin only with the live bankroll."""
     fig = _new_figure()
     if (fig is None):
         return None
     ax = fig.add_subplot(111)
-    colors = {"COUNT": "#c0392b", "TRACK": "#27ae60", "ORACLE": "#8e44ad"}
     for s in hands_by_strategy:
-        ax.hist(hands_by_strategy[s], bins=40, alpha=0.5, color=colors.get(s), label=s)
-    _style(ax, "How long the player lasts before being barred / ruined",
+        ax.hist(hands_by_strategy[s], bins=40, alpha=0.5,
+                color=STRATEGY_COLORS.get(s), label=s)
+    _style(ax, "How long the player lasts before " + cause,
            "hands played in a session", "number of sessions")
     ax.legend(fontsize=11)
     return fig
 
 
-def fig_trajectory_fan(trajectories, hero=None):
+STRATEGY_COLORS = {"BASIC": "#2980b9", "COUNT": "#c0392b", "COUNTX": "#e67e22",
+                   "COUNT0": "#d35400", "WONG": "#16a085", "TRACK": "#27ae60",
+                   "ORACLE": "#8e44ad", "DEALER": "#7f8c8d"}
+
+
+def fig_trajectory_fan(trajectories_by_strategy, hero=None):
+    """Bankroll paths across sessions, one colour per strategy. Accepts a dict
+    {strategy: [path, ...]} (the multi-strategy form) or, for backward
+    compatibility, a bare list of paths (treated as the hero's)."""
+    import matplotlib.lines as mlines
+    if (isinstance(trajectories_by_strategy, list)):
+        trajectories_by_strategy = {hero or "hero": trajectories_by_strategy}
     fig = _new_figure()
-    if (fig is None or not trajectories):
+    if (fig is None or not trajectories_by_strategy):
         return None
     ax = fig.add_subplot(111)
-    for traj in trajectories:
-        if (len(traj) > 2000):                       # downsample long paths to keep it snappy
-            step = len(traj) // 2000
-            xs = list(range(0, len(traj), step))
-            ys = traj[::step]
-        else:
-            xs = list(range(len(traj)))
-            ys = traj
-        ax.plot(xs, ys, color="#2980b9", lw=0.6, alpha=0.30)
-    base = trajectories[0][0] if (trajectories and trajectories[0]) else None
+    base, handles, n = None, [], 0
+    for s, paths in trajectories_by_strategy.items():
+        if (not paths):
+            continue
+        c = STRATEGY_COLORS.get(s, "#2980b9")
+        for traj in paths:
+            if (len(traj) > 2000):                   # downsample long paths to stay snappy
+                step = len(traj) // 2000
+                xs, ys = list(range(0, len(traj), step)), traj[::step]
+            else:
+                xs, ys = list(range(len(traj))), traj
+            ax.plot(xs, ys, color=c, lw=0.6, alpha=0.28)
+            if (base is None and traj):
+                base = traj[0]
+            n += 1
+        handles.append(mlines.Line2D([], [], color=c, lw=2, label=s))
+    if (not handles):
+        return None
     if (base is not None):
         ax.axhline(base, color="0.4", lw=0.9)
-    title = "Bankroll over time across %d sessions" % len(trajectories)
-    if (hero):
-        title += "  [%s]" % hero
-    _style(ax, title, "hand number", "bankroll")
+    _style(ax, "Bankroll over time across %d sessions" % n, "hand number", "bankroll")
+    ax.legend(handles=handles, fontsize=11)
     return fig
 
 
@@ -332,6 +424,21 @@ def plot_edge_by_true_count(records, strategy, path):
     plt.tight_layout()
     plt.savefig(path, dpi=110)
     plt.close()
+    return path
+
+
+def plot_edge_rows_multi(records, strategies, path):
+    """Save the multi-strategy edge-by-true-count overlay (matches the GUI plot)."""
+    rows_by = {s: edge_by_true_count(records, s) for s in strategies}
+    fig = fig_edge_rows_multi(rows_by)
+    if (fig is None):
+        return None
+    try:
+        from matplotlib.backends.backend_agg import FigureCanvasAgg
+        FigureCanvasAgg(fig)
+        fig.savefig(path, dpi=110)
+    except Exception:
+        return None
     return path
 
 

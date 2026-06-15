@@ -39,6 +39,27 @@ def edges(game):
             for i in range(game.numTracked)}
 
 
+def sweep_edges(base_config, field, values, cancel=None, progress=None):
+    """Run the game once per value of `field` (a Config field, e.g. 'numPacks' or
+    'penetration'), holding everything else fixed. Returns (values, {strategy:
+    [edge% aligned with values]}) -- the data for a parameter-sweep plot."""
+    import dataclasses
+    strategies = list(base_config.strategies)
+    series = {s: [] for s in strategies}
+    used = []
+    for k, v in enumerate(values):
+        if (cancel is not None):
+            cancel()
+        if (progress is not None):
+            progress(k, len(values), "sweep")
+        game = run_experiment(dataclasses.replace(base_config, **{field: v}), record=True)
+        e = edges(game)
+        used.append(v)
+        for s in strategies:
+            series[s].append(e.get(s, float("nan")))
+    return used, series
+
+
 def run(config, outdir="results", save_plots=True, cancel=None, progress=None):
     """Run the experiment selected by config.experiment. save_plots=False skips
     writing PNG/CSV/JSON (the returned dict carries the plot data so a GUI can
@@ -49,9 +70,9 @@ def run(config, outdir="results", save_plots=True, cancel=None, progress=None):
     if (kind == "game"):
         return _run_game(config, outdir, save_plots, cancel, progress)
     if (kind == "heat"):
-        return _run_heat(config, outdir, save_plots)
+        return _run_heat(config, outdir, save_plots, cancel, progress)
     if (kind == "bankroll"):
-        return _run_bankroll(config, outdir, save_plots)
+        return _run_bankroll(config, outdir, save_plots, cancel, progress)
     if (kind == "ceiling"):
         return _run_ceiling(config, outdir, save_plots, cancel)
     raise ValueError("unknown experiment '" + str(kind) + "' (game|heat|bankroll|ceiling)")
@@ -68,9 +89,10 @@ def _pick_hero(strategies):
     return strategies[0] if strategies else None
 
 
-def _calibration():
+def _calibration(config=None, cancel=None, progress=None):
     import bankroll
-    return bankroll.calibrate(bankroll.load_or_make_calibration())
+    return bankroll.calibrate(bankroll.load_or_make_calibration(
+        config=config, cancel=cancel, progress=progress))
 
 
 def _run_game(config, outdir, save_plots=True, cancel=None, progress=None):
@@ -79,25 +101,38 @@ def _run_game(config, outdir, save_plots=True, cancel=None, progress=None):
     game = run_experiment(config, record=True, cancel=cancel, progress=progress)
     rec = game.records
     rows = A.summary(rec)
+    stats = A.summary_stats(rec)
     print("[%s]  %d hands | shuffle=%s | dummies=%d"
           % (config.label, config.rounds, config.shuffle, config.dummyPlayers))
-    A.print_table([(s, "%.0f" % w, "%.0f" % p, _fmt(e)) for (s, w, p, e) in rows],
-                  ["strategy", "wagered", "profit", "edge"])
+    A.print_table([(d["strategy"], "%.0f" % d["wagered"], "%+.0f" % d["profit"],
+                    "%+.3f +/- %.3f" % (d["edge"], d["ci"]), "%+.2f" % d["win100"])
+                   for d in stats],
+                  ["strategy", "wagered", "profit", "edge % (95% CI)", "units/100"])
+    if (any(d["strategy"] in COUNTERS and abs(d["edge"]) < d["ci"] for d in stats)):
+        print("Note: a counting edge within its +/- CI of zero is not yet distinguishable "
+              "from break-even -- raise Rounds (or use Trials) to resolve it.")
 
     present = [r[0] for r in rows]
     hero = next((s for s in ("COUNT", "ORACLE", "TRACK", "BASIC") if s in present), None)
-    edge_rows = {}
-    if (hero):
-        tc_rows = A.edge_by_true_count(rec, hero)
-        edge_rows[hero] = tc_rows
-        print("\nEdge by true count [%s]:" % hero)
-        A.print_table([(b, n, _fmt(e)) for (b, n, e) in tc_rows],
-                      ["true_count", "hands", "edge"])
-        if (save_plots):
-            A.plot_edge_by_true_count(rec, hero, os.path.join(outdir, config.label + "_edge.png"))
+    edge_rows = {s: A.edge_by_true_count(rec, s) for s in present}
+    # One combined edge-by-true-count table: a true-count bucket per row, one edge
+    # column per strategy (a strategy that sat the bucket out -- e.g. WONG -- shows "-").
+    per = {s: {b: (n, e) for (b, n, e) in edge_rows[s]} for s in present}
+    bucketsets = [set(per[s]) for s in present if per[s]]
+    buckets = sorted(set().union(*bucketsets)) if bucketsets else []
+    if (buckets):
+        print("\nEdge by true count (edge %, one column per strategy):")
+        tbl = []
+        for b in buckets:
+            hands = max((per[s][b][0] for s in present if b in per[s]), default=0)
+            tbl.append(tuple([str(b), str(hands)]
+                             + [(_fmt(per[s][b][1]) if b in per[s] else "-") for s in present]))
+        A.print_table(tbl, ["true_count", "hands"] + present)
+    if (save_plots and present):
+        A.plot_edge_rows_multi(rec, present, os.path.join(outdir, config.label + "_edge.png"))
 
     if (config.heat_live or config.bankroll_live):
-        print("\nLive hero outcome (one composed session):")
+        print("\nLive counter outcomes (one composed session):")
         srows = []
         for g in game.guests:
             if (g.strategy in COUNTERS):
@@ -123,9 +158,9 @@ def _run_game_trials(config, outdir, save_plots=True, cancel=None, progress=None
     tracked = list(config.strategies)
     hero = _pick_hero(tracked)
     agg = {s: {"hands": [], "profit": [], "wagered": 0.0,
-               "ruined": 0, "barred": 0} for s in tracked}
+               "ruined": 0, "barred": 0, "unit": 10.0} for s in tracked}
     edge_acc = {}                                       # pooled edge-by-true-count
-    trajectories = []                                   # hero balance path per trial (first few)
+    trajectories = {s: [] for s in tracked}             # balance paths per strategy (first few)
     for t in range(config.trials):
         if (cancel is not None):
             cancel()
@@ -138,12 +173,16 @@ def _run_game_trials(config, outdir, save_plots=True, cancel=None, progress=None
             if (all(g.out for g in game.guests)):     # nobody left to simulate
                 break
         A.accumulate_edge(game.records, edge_acc)      # fold this trial in, then drop it
-        if (hero is not None and len(trajectories) < 60):
+        if (any(len(trajectories[s]) < 40 for s in tracked)):
             rec = game.records
-            path = [rec["bankroll"][i] for i in range(len(rec["round"]))
-                    if rec["strategy"][i] == hero]
-            if (path):
-                trajectories.append(path)
+            paths = {s: [] for s in tracked}
+            for i in range(len(rec["round"])):
+                s = rec["strategy"][i]
+                if (s in paths):
+                    paths[s].append(rec["bankroll"][i])
+            for s in tracked:
+                if (len(trajectories[s]) < 40 and paths[s]):
+                    trajectories[s].append(paths[s])
         for g in game.guests:
             a = agg[g.strategy]
             a["hands"].append(g.handsPlayed)
@@ -151,6 +190,7 @@ def _run_game_trials(config, outdir, save_plots=True, cancel=None, progress=None
             a["wagered"] += g.totalWagered
             a["ruined"] += int(g.ruined)
             a["barred"] += int(g.barred)
+            a["unit"] = g.unit
 
     n = config.trials
     print("[%s]  %d trials x up to %d hands  (heat_live=%s, bankroll_live=%s, shuffle=%s, dummies=%d)"
@@ -162,28 +202,43 @@ def _run_game_trials(config, outdir, save_plots=True, cancel=None, progress=None
         hands = np.array(a["hands"])
         profit = np.array(a["profit"])
         edge = 100.0 * float(profit.sum()) / a["wagered"] if a["wagered"] > 0 else 0.0
+        # CI on the pooled edge from the spread of per-trial profits (i.i.d. trials)
+        sd = float(profit.std(ddof=1)) if len(profit) > 1 else 0.0
+        se = 100.0 * float(np.sqrt(len(profit))) * sd / a["wagered"] if a["wagered"] > 0 else 0.0
+        total_hands = float(hands.sum())
+        win100 = 100.0 * (float(profit.sum()) / total_hands) / a["unit"] if (total_hands and a["unit"]) else 0.0
         rows.append((s,
                      "%.0f%%" % (100.0 * a["ruined"] / n),
                      "%.0f%%" % (100.0 * a["barred"] / n),
                      "%d" % int(np.median(hands)),
                      "%+.0f" % np.median(profit),
-                     "%+.0f .. %+.0f" % (np.percentile(profit, 10), np.percentile(profit, 90)),
-                     "%+.3f%%" % edge))
+                     "%+.3f +/- %.3f" % (edge, 1.96 * se),
+                     "%+.2f" % win100))
     A.print_table(rows, ["strategy", "P(ruin)", "P(bar)", "med.hands",
-                         "med.profit", "profit p10-p90", "pooled edge"])
+                         "med.profit", "edge % (95% CI)", "units/100"])
     survival = {s: agg[s]["hands"] for s in tracked}
     results = {s: agg[s]["profit"] for s in tracked}
     edge_rows = {s: A.edge_rows_from_acc(edge_acc, s) for s in tracked}
+    # Name what actually ends a session: barring needs live heat, ruin needs the
+    # live bankroll. Without either, sessions just run to the hand limit.
+    if (config.heat_live and config.bankroll_live):
+        cause = "being barred or going broke"
+    elif (config.heat_live):
+        cause = "being barred"
+    elif (config.bankroll_live):
+        cause = "going broke"
+    else:
+        cause = "the session ends"
     if (save_plots):
         A.plot_survival_hist(survival, os.path.join(outdir, config.label + "_survival.png"))
         print("Wrote results/" + config.label + "_survival.png")
-    return {"trials": agg, "survival": survival, "results": results,
+    return {"trials": agg, "survival": survival, "survival_cause": cause, "results": results,
             "edge_rows": edge_rows, "hero": hero, "trajectories": trajectories}
 
 
-def _run_heat(config, outdir, save_plots=True):
+def _run_heat(config, outdir, save_plots=True, cancel=None, progress=None):
     import heat
-    calib = _calibration()
+    calib = _calibration(config, cancel, progress)
     slopes = [0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 4.0, 5.0, 6.0, 8.0]
     rows = heat.aggressiveness_sweep(calib, slopes, threshold=config.heat_threshold,
                                      warmup=config.heat_warmup, base_rate=config.heat_rate,
@@ -203,9 +258,9 @@ def _run_heat(config, outdir, save_plots=True):
     return {"heat": rows}
 
 
-def _run_bankroll(config, outdir, save_plots=True):
+def _run_bankroll(config, outdir, save_plots=True, cancel=None, progress=None):
     import bankroll
-    calib = _calibration()
+    calib = _calibration(config, cancel, progress)
     print("[bankroll] edge %+.4f%%/unit, N0 %.0f hands. B0=%.0f units, ruin at %.0f%%, horizon %d"
           % (calib["edge_bw"] * 100, calib["n0"], config.bankroll_units,
              config.ruin_frac * 100, config.bankroll_horizon))

@@ -65,14 +65,16 @@ DESCRIPTIONS = {
              "repeat the session many times (Trials). Plots: edge by true count, bankroll over time, "
              "and with Trials > 1 the result distribution and survival."),
     "heat": ("How steeply can a card counter raise their bets before the pit backs them off? Sweeps "
-             "bet-aggressiveness on a built-in counter profile. Ignores the table, shuffle and "
-             "strategy settings; uses the Heat threshold / warm-up / rate. Plot: heat curve."),
+             "bet-aggressiveness for a Hi-Lo counter calibrated to YOUR table (decks, penetration, "
+             "rules, shuffle), using the spread and Heat threshold / warm-up / rate. The first run for "
+             "a new table spends ~30s calibrating, then caches it. Plot: heat curve."),
     "bankroll": ("With a finite bankroll, how does your chance of going broke trade off against growth "
-                 "as you bet a bigger fraction (Kelly)? Ignores the table, shuffle and strategy "
-                 "settings; uses Bankroll units. Plot: risk-of-ruin curve."),
+                 "as you bet a bigger fraction (Kelly)? Uses a Hi-Lo counter calibrated to YOUR table "
+                 "(decks, penetration, rules, shuffle) and your Bankroll units. The first run for a new "
+                 "table spends ~30s calibrating, then caches it. Plot: risk-of-ruin curve."),
     "ceiling": ("The theoretical best: a solver computes perfect play for the exact remaining cards "
-                "(no game is dealt) and shows how much it beats basic strategy. Uses Ceiling samples "
-                "and Dealer-hits-soft-17. Output: tables only (no plot)."),
+                "(no game is dealt) and shows how much it beats basic strategy. Uses Ceiling samples, "
+                "Decks, Late surrender, and Dealer-hits-soft-17. Output: tables only (no plot)."),
 }
 
 DEFS = {
@@ -141,12 +143,21 @@ DEFS = {
 }
 
 PLOT_BUILDERS = {
-    "Edge vs true count": ("fig_edge_rows", ("edge_rows", "hero")),
-    "Bankroll trajectory": (None, None),          # handled specially (line vs fan)
+    "Edge vs true count": (None, None),            # handled specially (all selected strategies)
+    "Bankroll trajectory": (None, None),          # handled specially (line vs per-strategy fan)
     "Result distribution": ("fig_result_hist", ("results",)),
-    "Survival histogram": ("fig_survival", ("survival",)),
+    "Survival histogram": ("fig_survival", ("survival", "survival_cause")),
     "Heat curve": ("fig_heat_curve", ("heat",)),
     "Risk-of-ruin curve": ("fig_risk_curve", ("risk",)),
+}
+
+# Parameter sweep (game experiment only): label -> (Config field, type, default values).
+# Run the game once per value, holding everything else fixed, and plot edge vs value.
+SWEEP_FIELDS = {
+    "Decks": ("numPacks", int, "1,2,4,6,8"),
+    "Penetration": ("penetration", float, "0.50,0.65,0.75,0.85"),
+    "Max bet (units)": ("spread_max", int, "4,8,12,16,20"),
+    "Ramp slope (units/TC)": ("spread_slope", float, "1.0,1.5,2.0,3.0"),
 }
 
 
@@ -154,11 +165,14 @@ def relevant_controls(exp, heat_live, bankroll_live, shuffle, strategies=()):
     base = {"label", "seed"}
     heat_knobs = {"heat_threshold", "heat_warmup", "heat_rate"}
     spread_knobs = {"spread_min", "spread_max", "ramp_start", "spread_slope"}
+    # Heat sweeps the ramp slope itself, so it uses the spread bounds but not the slope.
+    ramp_bounds = {"spread_min", "spread_max", "ramp_start"}
+    # The game/table rules that change the per-count calibration heat & bankroll use.
+    table_knobs = {"shuffle", "decks", "penetration", "blackjackPays", "hitSoft17", "surrender"}
     has_counter = any(s in COUNTERS for s in strategies)
     if (exp == "game"):
-        s = base | {"strategies", "shuffle", "decks", "penetration", "blackjackPays",
-                    "hitSoft17", "surrender", "dummyPlayers", "rounds", "trials",
-                    "heat_live", "bankroll_live"}
+        s = base | {"strategies", "dummyPlayers", "rounds", "trials",
+                    "heat_live", "bankroll_live"} | table_knobs
         if (shuffle == "casino"):
             s |= {"shuffleRiffles", "shuffleStrips", "shuffleCut"}
         if (has_counter):
@@ -171,16 +185,26 @@ def relevant_controls(exp, heat_live, bankroll_live, shuffle, strategies=()):
             s.add("bankroll_units")
         return s
     if (exp == "heat"):
-        return base | heat_knobs | spread_knobs
+        s = base | heat_knobs | ramp_bounds | table_knobs
+        if (shuffle == "casino"):
+            s |= {"shuffleRiffles", "shuffleStrips", "shuffleCut"}
+        return s
     if (exp == "bankroll"):
-        return base | {"bankroll_units"}
+        s = base | {"bankroll_units"} | table_knobs
+        if (shuffle == "casino"):
+            s |= {"shuffleRiffles", "shuffleStrips", "shuffleCut"}
+        return s
     if (exp == "ceiling"):
-        return base | {"hitSoft17", "ceiling_samples"}
+        return base | {"hitSoft17", "surrender", "decks", "ceiling_samples"}
     return base
 
 
 def estimate_seconds(cfg):
-    calib_missing = not os.path.exists(os.path.join(OUTDIR, "calib.npz"))
+    try:
+        import bankroll
+        calib_missing = not os.path.exists(bankroll.calib_path(cfg))
+    except Exception:
+        calib_missing = True
     e = cfg.experiment
     if (e == "game"):
         players = len(cfg.strategies) + cfg.dummyPlayers + 1
@@ -296,6 +320,11 @@ class App:
         save_cb.pack(side="left", padx=(12, 0))
         Tooltip(save_cb, "When checked, the shown plots are written as PNGs to the %s/ folder "
                          "(named after the run label). Off by default." % OUTDIR)
+        cli_btn = ttk.Button(action, text="Copy CLI", command=self.on_copy_cli)
+        cli_btn.pack(side="left", padx=(8, 0))
+        Tooltip(cli_btn, "Copy the current settings as a reproducible 'python main.py ...' command "
+                         "(to the clipboard and the results panel), so an exploration you found by "
+                         "clicking can be rerun, scripted, or saved.")
         self.progbar = ttk.Progressbar(action, mode="determinate", maximum=100, length=220)
         self.progbar.pack(side="right")
         self.estimate_var = tk.StringVar(value="")
@@ -341,7 +370,7 @@ class App:
         self.h17_var = tk.BooleanVar(value=True)
         self.surr_var = tk.BooleanVar(value=False)
         self.dummies_var = tk.StringVar(value="0")
-        self.rounds_var = tk.StringVar(value="100000")
+        self.rounds_var = tk.StringVar(value="500000")
         self.seed_var = tk.StringVar(value="42")
         self.trials_var = tk.StringVar(value="1")
         self.heatlive_var = tk.BooleanVar(value=False)
@@ -354,8 +383,11 @@ class App:
         self.spreadmin_var = tk.StringVar(value="1")
         self.spreadmax_var = tk.StringVar(value="20")
         self.rampstart_var = tk.StringVar(value="1.0")
-        self.spreadslope_var = tk.StringVar(value="1.0")
+        self.spreadslope_var = tk.StringVar(value="2.0")
         self.wong_var = tk.StringVar(value="1.0")
+        self.sweep_var = tk.StringVar(value="(none)")
+        self.sweepvals_var = tk.StringVar(value="")
+        self._sweep_field = None
         self.strat_vars = {s: tk.BooleanVar(value=(s in ("BASIC", "COUNT", "DEALER")))
                            for s in STRATEGIES}
 
@@ -409,6 +441,21 @@ class App:
         row("Bankroll units", ttk.Entry(cfgbox, textvariable=self.bunits_var, width=14), "bankroll_units")
         row("Ceiling samples", ttk.Entry(cfgbox, textvariable=self.ceil_var, width=14), "ceiling_samples")
 
+        sweepbox = ttk.LabelFrame(left, text="2b.  Parameter sweep  (game only, optional)", padding=8)
+        sweepbox.pack(side="top", fill="x", pady=(8, 0))
+        ttk.Label(sweepbox, text="Sweep over").grid(row=0, column=0, sticky="w", pady=2)
+        sweep_combo = ttk.Combobox(sweepbox, textvariable=self.sweep_var, state="readonly", width=18,
+                                   values=["(none)"] + list(SWEEP_FIELDS))
+        sweep_combo.grid(row=0, column=1, sticky="we", pady=2, padx=(8, 0))
+        ttk.Label(sweepbox, text="Values").grid(row=1, column=0, sticky="w", pady=2)
+        sweep_entry = ttk.Entry(sweepbox, textvariable=self.sweepvals_var, width=20)
+        sweep_entry.grid(row=1, column=1, sticky="we", pady=2, padx=(8, 0))
+        self._sweep_widgets = [sweep_combo, sweep_entry]
+        Tooltip(sweep_combo, "Run the game once per value (comma-separated, below), holding everything "
+                             "else fixed, and plot each strategy's edge against the swept parameter. "
+                             "'(none)' = a normal single run. Takes about (number of values) x a single run.")
+        self.sweep_var.trace_add("write", self._on_sweep_change)
+
         plotbox = ttk.LabelFrame(left, text="3.  Plots to show", padding=8)
         plotbox.pack(side="top", fill="x", pady=(8, 0))
         self.plot_vars = {}
@@ -419,9 +466,13 @@ class App:
             cb.pack(anchor="w")
             self.plot_vars[opt] = v
             self.plot_cbs[opt] = cb
+        self.plothint_var = tk.StringVar()
+        ttk.Label(plotbox, textvariable=self.plothint_var, foreground="#666",
+                  justify="left").pack(anchor="w", pady=(6, 0))
 
         for var in (self.rounds_var, self.dummies_var, self.ceil_var, self.packs_var,
-                    self.heatthr_var, self.heatwarm_var, self.heatrate_var, self.bunits_var):
+                    self.heatthr_var, self.heatwarm_var, self.heatrate_var, self.bunits_var,
+                    self.sweepvals_var):
             var.trace_add("write", self.update_estimate)
         for v in self.strat_vars.values():
             v.trace_add("write", lambda *a: self.on_change())
@@ -434,6 +485,8 @@ class App:
     # --- reactive UI ---
     def available_plots(self):
         exp = self.exp_var.get()
+        if (exp == "game" and self.sweep_var.get() in SWEEP_FIELDS):
+            return []                              # a sweep draws its own edge-vs-parameter plot
         if (exp == "heat"):
             return ["Heat curve"]
         if (exp == "bankroll"):
@@ -451,9 +504,21 @@ class App:
             return plots
         return ["Edge vs true count", "Bankroll trajectory"]
 
+    def _on_sweep_change(self, *_):
+        name = self.sweep_var.get()
+        if (name in SWEEP_FIELDS):
+            self.sweepvals_var.set(SWEEP_FIELDS[name][2])
+        self.on_change()
+
     def on_change(self, *_):
         exp = self.exp_var.get()
         self.desc_var.set(DESCRIPTIONS.get(exp, ""))
+        sweep_on = (exp == "game")
+        for w in getattr(self, "_sweep_widgets", []):
+            w.configure(state=("readonly" if (sweep_on and w is self._sweep_widgets[0]) else
+                               ("normal" if sweep_on else "disabled")))
+        if (not sweep_on and self.sweep_var.get() != "(none)"):
+            self.sweep_var.set("(none)")
         strats = tuple(s for s in STRATEGIES if self.strat_vars[s].get())
         rel = relevant_controls(exp, self.heatlive_var.get(), self.bankrolllive_var.get(),
                                 self.shuffle_var.get(), strats)
@@ -477,11 +542,24 @@ class App:
                 self.plot_vars[opt].set(False)
         if (avail and not any(self.plot_vars[o].get() for o in avail)):
             self.plot_vars[avail[0]].set(True)
+        if (exp == "game" and self.sweep_var.get() in SWEEP_FIELDS):
+            self.plothint_var.set("A parameter sweep draws its own plot (edge vs the swept "
+                                  "value), so these don't apply.")
+        else:
+            self.plothint_var.set("Greyed-out plots need the matching mode: Result distribution\n"
+                                  "needs Trials > 1; Survival needs Trials > 1 with live heat or bankroll.")
         self.update_estimate()
 
     def update_estimate(self, *_):
         try:
-            self.estimate_var.set("estimated runtime: " + human_time(estimate_seconds(self.build_config())))
+            cfg = self.build_config()
+            secs = estimate_seconds(cfg)
+            # a parameter sweep runs the game once per value
+            if (cfg.experiment == "game" and self.sweep_var.get() in SWEEP_FIELDS):
+                nvals = len([x for x in self.sweepvals_var.get().split(",") if x.strip()])
+                if (nvals > 1):
+                    secs *= nvals
+            self.estimate_var.set("estimated runtime: " + human_time(secs))
         except Exception:
             self.estimate_var.set("estimated runtime: -")
 
@@ -519,6 +597,45 @@ class App:
             ceiling_samples=int(self.ceil_var.get()),
         )
 
+    def _cli_command(self):
+        """The current settings as a reproducible 'python main.py ...' command.
+        Emits strategies plus any field that differs from the Config default."""
+        import dataclasses
+        cfg = self.build_config()
+        default = Config(experiment=cfg.experiment)
+        parts = ["python main.py", cfg.experiment, "strategies=" + ",".join(cfg.strategies)]
+        for f in dataclasses.fields(cfg):
+            name = f.name
+            if (name in ("experiment", "strategies", "label")):
+                continue
+            val = getattr(cfg, name)
+            if (val == getattr(default, name)):
+                continue
+            if (isinstance(val, bool)):
+                parts.append("%s=%s" % (name, "true" if val else "false"))
+            else:
+                parts.append("%s=%s" % (name, val))
+        return " ".join(parts)
+
+    def on_copy_cli(self):
+        try:
+            cmd = self._cli_command()
+        except (ValueError, TypeError) as e:
+            self.status.set("Couldn't build command: %s" % e)
+            return
+        try:
+            self.root.clipboard_clear()
+            self.root.clipboard_append(cmd)
+        except tk.TclError:
+            pass
+        self.results.clear()
+        self._canvases = []
+        t = tk.Text(self.results.inner, wrap="word", font=("Consolas", FONT_PT), height=4)
+        t.insert("1.0", cmd)
+        t.config(state="disabled")
+        t.pack(fill="x", padx=2, pady=(2, 10))
+        self.status.set("Copied CLI command to clipboard.")
+
     def _check_cancel(self):
         if (self._cancel.is_set()):
             raise Cancelled()
@@ -530,9 +647,10 @@ class App:
     def _poll(self):
         if (not self._running):
             return
-        if (self._run_is_game and self._prog_label):
-            self.progbar["value"] = self._prog_val
+        if (self._prog_label):                      # also covers the heat/bankroll calibration pass
             self.status.set("Running...  %s" % self._prog_label)
+            if (self._run_is_game):
+                self.progbar["value"] = self._prog_val
         self.root.after(150, self._poll)
 
     def on_cancel(self):
@@ -545,6 +663,20 @@ class App:
         except (ValueError, TypeError) as e:
             self.status.set("Bad input: %s" % e)
             return
+        # Optional parameter sweep (game only): run once per value and plot edge vs value.
+        self._sweep_field = None
+        sweep_name = self.sweep_var.get()
+        if (cfg.experiment == "game" and sweep_name in SWEEP_FIELDS):
+            field, conv, _default = SWEEP_FIELDS[sweep_name]
+            try:
+                vals = [conv(x.strip()) for x in self.sweepvals_var.get().split(",") if x.strip()]
+            except ValueError as e:
+                self.status.set("Bad sweep values: %s" % e)
+                return
+            if (len(vals) < 2):
+                self.status.set("Enter at least two sweep values (comma-separated).")
+                return
+            self._sweep_field = (sweep_name, field, vals)
         self._cancel.clear()
         self._run_label = cfg.label
         self.run_btn.config(state="disabled")
@@ -569,8 +701,18 @@ class App:
             cancelled = False
             try:
                 sys.stdout = buf
-                bundle = experiment.run(cfg, OUTDIR, save_plots=False,
-                                        cancel=self._check_cancel, progress=self._progress) or {}
+                if (self._sweep_field):
+                    name, field, vals = self._sweep_field
+                    xs, series = experiment.sweep_edges(cfg, field, vals,
+                                                        cancel=self._check_cancel, progress=self._progress)
+                    print("Edge (%%) vs %s:" % name)
+                    import analysis as A
+                    A.print_table([tuple([str(xs[i])] + ["%+.3f" % series[s][i] for s in series])
+                                   for i in range(len(xs))], [name] + list(series))
+                    bundle = {"_sweep": (name, xs, series)}
+                else:
+                    bundle = experiment.run(cfg, OUTDIR, save_plots=False,
+                                            cancel=self._check_cancel, progress=self._progress) or {}
             except Cancelled:
                 cancelled = True
             except Exception as e:
@@ -604,13 +746,25 @@ class App:
     # --- rendering ---
     def _figs_for(self, bundle):
         import analysis as A
+        if (bundle.get("_sweep")):
+            name, xs, series = bundle["_sweep"]
+            fig = A.fig_param_sweep(name, xs, series)
+            return [("Edge vs %s" % name, fig)] if fig is not None else []
         figs = []
         for opt, var in self.plot_vars.items():
             if (not var.get()):
                 continue
-            if (opt == "Bankroll trajectory"):
+            if (opt == "Edge vs true count"):
+                rows_by = {}
+                if (bundle.get("records")):                      # single run: every strategy from the log
+                    for row in bundle.get("summary", []):
+                        rows_by[row[0]] = A.edge_by_true_count(bundle["records"], row[0])
+                elif (bundle.get("edge_rows")):                  # trials: pooled per strategy
+                    rows_by = bundle["edge_rows"]
+                fig = A.fig_edge_rows_multi(rows_by) if rows_by else None
+            elif (opt == "Bankroll trajectory"):
                 if (bundle.get("trajectories")):
-                    fig = A.fig_trajectory_fan(bundle["trajectories"], bundle.get("hero"))
+                    fig = A.fig_trajectory_fan(bundle["trajectories"])
                 elif (bundle.get("records")):
                     fig = A.fig_bankroll(bundle["records"])
                 else:

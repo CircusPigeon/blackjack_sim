@@ -22,15 +22,37 @@ EDGE_LO = -6
 EDGE_HI = 12
 
 
-def load_or_make_calibration(path="results/calib.npz", rounds=1000000):
-    """Load the cached COUNT calibration, or run it once and cache it."""
+def calib_path(config=None):
+    """Where a COUNT calibration is cached. With a config, the path is keyed by the
+    game parameters that change the per-count outcome (decks, penetration, rules,
+    shuffle), so heat/bankroll reflect the chosen table instead of a fixed default."""
+    if (config is None):
+        return "results/calib.npz"
+    return os.path.join("results", "calib_%dd_p%s_h%d_s%d_bj%s_%s.npz" % (
+        config.numPacks, ("%g" % config.penetration), int(config.hitSoft17),
+        int(config.surrender), ("%g" % config.blackjackPays), config.shuffle))
+
+
+def load_or_make_calibration(path=None, rounds=1000000, config=None, cancel=None, progress=None):
+    """Load the cached COUNT calibration, or run it once and cache it. With a
+    config, the calibration matches that game (decks, penetration, rules, shuffle);
+    without one, it uses the default game (what make_figures relies on). cancel /
+    progress let a long first-time calibration be aborted and reported."""
+    from config import Config
+    from experiment import run_experiment
+    if (path is None):
+        path = calib_path(config)
     if (os.path.exists(path)):
         d = np.load(path)
         return {"true_count": d["tc"], "bet": d["bet"], "result": d["result"]}
-    from config import Config
-    from experiment import run_experiment
-    g = run_experiment(Config(rounds=rounds, strategies=("COUNT",), shuffle="random"),
-                       record=True)
+    if (config is not None):
+        cal_cfg = Config(rounds=rounds, strategies=("COUNT",), shuffle=config.shuffle,
+                         numPacks=config.numPacks, penetration=config.penetration,
+                         hitSoft17=config.hitSoft17, surrender=config.surrender,
+                         blackjackPays=config.blackjackPays)
+    else:
+        cal_cfg = Config(rounds=rounds, strategies=("COUNT",), shuffle="random")
+    g = run_experiment(cal_cfg, record=True, cancel=cancel, progress=progress)
     rec = g.records
     os.makedirs(os.path.dirname(path), exist_ok=True)
     np.savez(path, tc=rec["true_count"], bet=rec["bet"], result=rec["result"])

@@ -289,7 +289,7 @@ def exp_n0(trials, rounds):
         if np.isfinite(v):
             ax.annotate("{:,}".format(int(round(v, -2))), xy=(xi, v), xytext=(0, 4),
                         textcoords="offset points", ha="center", fontsize=9.5, color="#5b2c80")
-    A._style(ax, "Game selection is the lever: fewer decks, a far shorter grind",
+    A._style(ax, "The importance of game selection: fewer decks, a far shorter grind",
              "shoe size (Hi-Lo, 1–16 spread, 75% pen)", "N0 (hands to 1-SD significance, log scale)")
     ax2 = ax.twinx()
     ax2.plot(x, wr, "o--", color="#27ae60", lw=1.7)
