@@ -199,6 +199,22 @@ precompute_eor.py  derive the EoR betting weights per ruleset + the nonlinear be
 precompute_indices.py  derive the index-play thresholds (Illustrious 18) for this exact game
 make_figures.py  regenerate the curated write-up figures (SVG/PNG) + manifest
                  (incl. counting_systems BC/PE scatter and the edge_crossover figure)
+tests/test_engine.py  correctness checks for the engine primitives
+```
+
+## Tests
+
+Reproducible figures (fixed seeds) guarantee the results don't *drift*; the tests
+guarantee the primitives they rest on are *right* (a bug reproduces perfectly too).
+`tests/test_engine.py` locks down hand evaluation and soft aces, dealer H17/S17
+play, basic strategy and the Illustrious-18 deviations, and the balance of every
+count, plus one end-to-end check that a seeded game reproduces the known edges
+(basic slightly negative, dealer-mimic ~−5%, Hi-Lo ahead of basic). No third-party
+dependency -- runs as a script or under pytest:
+
+```
+python tests/test_engine.py     # prints PASS/FAIL, exits non-zero on failure
+pytest tests/test_engine.py -q  # if pytest is installed
 ```
 
 ## Figures for the write-up
