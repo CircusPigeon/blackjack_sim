@@ -21,7 +21,9 @@ class Config:
     # table rules
     hitSoft17: bool = True
     blackjackPays: float = 1.5      # 3:2 = 1.5, 6:5 = 1.2
-    surrender: bool = False         # late surrender (off by default; most casinos don't offer it)
+    surrender: bool = False         # surrender offered at all (off by default)
+    earlySurrender: bool = False    # if surrender on: early (before the dealer peeks) vs late
+    doubleAfterSplit: bool = True   # may double a hand formed by splitting a pair (DAS)
     maxHands: int = 4
 
     # who sits at the table (strategy tags the engine understands today)
@@ -73,6 +75,8 @@ class Config:
             "hitSoft17": self.hitSoft17,
             "blackjackPays": self.blackjackPays,
             "surrender": self.surrender,
+            "earlySurrender": self.earlySurrender,
+            "doubleAfterSplit": self.doubleAfterSplit,
             "maxHands": self.maxHands,
         }
 

@@ -28,9 +28,11 @@ def calib_path(config=None):
     shuffle), so heat/bankroll reflect the chosen table instead of a fixed default."""
     if (config is None):
         return "results/calib.npz"
-    return os.path.join("results", "calib_%dd_p%s_h%d_s%d_bj%s_%s.npz" % (
+    es = "e" if getattr(config, "earlySurrender", False) else ""
+    das = int(getattr(config, "doubleAfterSplit", True))
+    return os.path.join("results", "calib_%dd_p%s_h%d_s%d%s_das%d_bj%s_%s.npz" % (
         config.numPacks, ("%g" % config.penetration), int(config.hitSoft17),
-        int(config.surrender), ("%g" % config.blackjackPays), config.shuffle))
+        int(config.surrender), es, das, ("%g" % config.blackjackPays), config.shuffle))
 
 
 def load_or_make_calibration(path=None, rounds=1000000, config=None, cancel=None, progress=None):

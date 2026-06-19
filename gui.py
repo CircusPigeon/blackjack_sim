@@ -119,9 +119,15 @@ DEFS = {
     "blackjackPays": "Payout for a natural blackjack. 1.5 = the standard 3:2; 1.2 = the stingy 6:5 (much worse for you).",
     "hitSoft17": ("Whether the dealer draws on a 'soft 17' (an ace as 11, e.g. A-6). Hitting soft 17 "
                   "(H17) is slightly worse for the player than standing on it (S17)."),
-    "surrender": ("Late surrender: give up half your bet and quit the hand after seeing your first two "
-                  "cards and the dealer's upcard (first decision only). Off by default, since most "
-                  "casinos don't offer it; the curated figures assume it is off."),
+    "surrender": ("Give up half your bet and fold after seeing your two cards and the dealer's upcard.\n"
+                  "- No surrender: not offered (the default; most casinos)\n"
+                  "- Late surrender: only after the dealer peeks for blackjack (a dealer natural ends the\n"
+                  "  hand first, so you can't surrender to it). Worth ~0.07%.\n"
+                  "- Early surrender: BEFORE the peek, so you may fold even when the dealer makes a natural\n"
+                  "  (you lose only half). Rare but valuable -- worth ~0.5%, with a much wider chart."),
+    "das": ("Double after split: may you double down on a hand created by splitting a pair? On is "
+            "player-friendly (worth ~0.13%) and changes a few split decisions (you split 4,4 / 6,6 / "
+            "2,2 / 3,3 against more upcards when you can double the result)."),
     "dummyPlayers": ("Extra bystanders who use up cards but aren't tracked. They do NOT change your "
                      "per-hand edge, but they slow the game down (fewer hands per hour)."),
     "rounds": "How many hands to deal in one session (or per trial in Trials mode).",
@@ -168,7 +174,7 @@ def relevant_controls(exp, heat_live, bankroll_live, shuffle, strategies=()):
     # Heat sweeps the ramp slope itself, so it uses the spread bounds but not the slope.
     ramp_bounds = {"spread_min", "spread_max", "ramp_start"}
     # The game/table rules that change the per-count calibration heat & bankroll use.
-    table_knobs = {"shuffle", "decks", "penetration", "blackjackPays", "hitSoft17", "surrender"}
+    table_knobs = {"shuffle", "decks", "penetration", "blackjackPays", "hitSoft17", "surrender", "das"}
     has_counter = any(s in COUNTERS for s in strategies)
     if (exp == "game"):
         s = base | {"strategies", "dummyPlayers", "rounds", "trials",
@@ -368,7 +374,8 @@ class App:
         self.pen_var = tk.StringVar(value="0.75")
         self.bjp_var = tk.StringVar(value="1.5")
         self.h17_var = tk.BooleanVar(value=True)
-        self.surr_var = tk.BooleanVar(value=False)
+        self.surr_var = tk.StringVar(value="No surrender")
+        self.das_var = tk.BooleanVar(value=True)
         self.dummies_var = tk.StringVar(value="0")
         self.rounds_var = tk.StringVar(value="500000")
         self.seed_var = tk.StringVar(value="42")
@@ -426,7 +433,8 @@ class App:
         row("Penetration", combo(self.pen_var, ["0.50", "0.65", "0.75", "0.85"]), "penetration", "readonly")
         row("Blackjack pays", combo(self.bjp_var, ["1.5", "1.2"]), "blackjackPays", "readonly")
         row("Dealer hits soft 17", ttk.Checkbutton(cfgbox, variable=self.h17_var), "hitSoft17")
-        row("Late surrender", ttk.Checkbutton(cfgbox, variable=self.surr_var), "surrender")
+        row("Surrender", combo(self.surr_var, ["No surrender", "Early surrender", "Late surrender"], width=16), "surrender", "readonly")
+        row("Double after split", ttk.Checkbutton(cfgbox, variable=self.das_var), "das")
         row("Dummy players", combo(self.dummies_var, ["0", "1", "2", "4", "6"]), "dummyPlayers", "readonly")
         row("Rounds / session", ttk.Entry(cfgbox, textvariable=self.rounds_var, width=14), "rounds")
         row("Seed", ttk.Entry(cfgbox, textvariable=self.seed_var, width=14), "seed")
@@ -583,7 +591,9 @@ class App:
             penetration=float(self.pen_var.get()),
             blackjackPays=float(self.bjp_var.get()),
             hitSoft17=self.h17_var.get(),
-            surrender=self.surr_var.get(),
+            surrender=(self.surr_var.get() != "No surrender"),
+            earlySurrender=(self.surr_var.get() == "Early surrender"),
+            doubleAfterSplit=self.das_var.get(),
             dummyPlayers=int(self.dummies_var.get()),
             rounds=int(self.rounds_var.get()),
             seed=int(self.seed_var.get()),

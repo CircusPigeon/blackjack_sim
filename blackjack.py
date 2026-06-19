@@ -175,6 +175,12 @@ class Blackjack:
         self.log("  Dealer shows " + str(upcard))
         if (upcard == 1):
             self.offerInsurance(tc)
+        # Early surrender is decided before the dealer peeks, so a surrendered hand
+        # only loses half even when the dealer turns out to have a blackjack.
+        if (self.rules["surrender"] and self.rules.get("earlySurrender")):
+            for i in range(self.numPlaying):
+                if (self.act[i]):
+                    self._offerEarlySurrender(self.players[i])
 
         dealerNatural = self.dealer.blackjack(0)
         if (dealerNatural):
@@ -281,15 +287,30 @@ class Blackjack:
             self.playHand(player, h, upcard)
             h += 1
 
+    def _offerEarlySurrender(self, player):
+        # One initial two-card hand, decided before the dealer peeks. A SURRENDER
+        # from the player's strategy retires the hand (it loses half at settle,
+        # which checks surrender before the dealer's blackjack).
+        upcard = self.dealer.getShowcard()
+        play = player.getPlay(0, upcard, self._playSignal(player), False, False, True)
+        if (play == Play.SURRENDER.value):
+            player.surrendered[0] = True
+            player.handDone[0] = True
+            self.log("  " + player.getName() + " early-surrenders vs " + str(upcard))
+
     def playHand(self, player, i, upcard):
         while (True):
             if (player.handDone[i] or player.bust(i) or player.blackjack(i)):
                 break
             tc = self._playSignal(player)
-            canDouble = (len(player.hand[i]) == 2)
+            das = self.rules.get("doubleAfterSplit", True)
+            # No-DAS: a hand formed by a split (more than one hand on the felt) can't double.
+            canDouble = (len(player.hand[i]) == 2) and (das or len(player.hand) == 1)
             canSplit = (player.isPair(i) and len(player.hand) < self.rules["maxHands"])
-            canSurrender = (self.rules["surrender"] and len(player.hand) == 1
-                            and len(player.hand[i]) == 2)
+            # Late surrender is offered during play; early surrender is decided
+            # before the peek (see _offerEarlySurrender), so it's not offered here.
+            canSurrender = (self.rules["surrender"] and not self.rules.get("earlySurrender")
+                            and len(player.hand) == 1 and len(player.hand[i]) == 2)
             play = player.getPlay(i, upcard, tc, canDouble, canSplit, canSurrender)
             if (play == Play.DOUBLE.value and canDouble):
                 self.doubleDown(player, i)

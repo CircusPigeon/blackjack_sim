@@ -21,12 +21,22 @@ def _hitSoft17(player):
     return True
 
 
+def _das(player):
+    rules = getattr(player, "rules", None)
+    return rules.get("doubleAfterSplit", True) if rules else True
+
+
+def _early(player):
+    rules = getattr(player, "rules", None)
+    return bool(rules.get("earlySurrender")) if rules else False
+
+
 def basicPlay(player, i, upcard, canDouble, canSplit, canSurrender):
     total = player.getTotal(i)
     soft = player.soft
     if (canSurrender and not soft and _surrender(player, i, upcard, _hitSoft17(player))):
         return SURRENDER
-    if (canSplit and player.isPair(i) and _pairSplit(player.hand[i][0], upcard)):
+    if (canSplit and player.isPair(i) and _pairSplit(player.hand[i][0], upcard, _das(player))):
         return SPLIT
     if (soft):
         return _softPlay(total, upcard, canDouble)
@@ -58,7 +68,10 @@ def countPlay(player, i, upcard, trueCount, canDouble, canSplit, canSurrender,
 
 
 def _surrender(player, i, up, hitSoft17):
-    # Late surrender, H17 chart. Evaluated only on a fresh two-card hard hand.
+    # Evaluated only on a fresh two-card hard hand.
+    if (_early(player)):
+        return _early_surrender(player, i, up)
+    # Late surrender, H17 chart.
     if (player.isPair(i) and player.hand[i][0] == 8):
         return up == 1 and hitSoft17          # 8,8 vs A (H17): surrender, don't split
     if (player.isPair(i)):
@@ -73,7 +86,29 @@ def _surrender(player, i, up, hitSoft17):
     return False
 
 
-def _pairSplit(card, up):
+def _early_surrender(player, i, up):
+    """Early surrender (decided before the dealer peeks for blackjack), H17 chart.
+    The wide vs-ace / vs-ten plays -- giving up even when the dealer may have a
+    natural -- are the gain over late surrender."""
+    total = player.getTotal(i)
+    pair = player.hand[i][0] if player.isPair(i) else 0
+    if (up == 1):                              # vs Ace
+        if (pair in (3, 6, 7, 8)):
+            return True                        # 3,3 / 6,6 / 7,7 / 8,8
+        return total in (5, 6, 7, 12, 13, 14, 15, 16, 17)
+    if (up == 10):                             # vs Ten
+        if (pair in (7, 8)):
+            return True                        # 7,7 / 8,8
+        return total in (14, 15, 16)
+    if (up == 9):
+        return total == 16                     # same as late
+    return False
+
+
+def _pairSplit(card, up, das=True):
+    # Without double-after-split (das=False), a few pairs split against fewer
+    # upcards (you can't recoup by doubling the split hand): 2,2/3,3 drop 2-3,
+    # 4,4 never splits, 6,6 drops 2.
     if (card == 1):          # A,A
         return True
     if (card == 10):         # T,T
@@ -85,13 +120,13 @@ def _pairSplit(card, up):
     if (card == 7):
         return up in (2, 3, 4, 5, 6, 7)
     if (card == 6):
-        return up in (2, 3, 4, 5, 6)
+        return up in (2, 3, 4, 5, 6) if das else up in (3, 4, 5, 6)
     if (card == 5):          # play as hard 10
         return False
     if (card == 4):
-        return up in (5, 6)
+        return up in (5, 6) if das else False
     if (card in (2, 3)):
-        return up in (2, 3, 4, 5, 6, 7)
+        return up in (2, 3, 4, 5, 6, 7) if das else up in (4, 5, 6, 7)
     return False
 
 
