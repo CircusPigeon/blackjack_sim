@@ -57,6 +57,7 @@ EXP_TAGS = [
     ("game", "Game  —  simulate real hands (the flexible one)"),
     ("heat", "Heat  —  when does the pit catch a counter?"),
     ("bankroll", "Bankroll  —  risk of going broke vs bet size"),
+    ("stake", "My spread  —  what bankroll does my spread need?"),
     ("ceiling", "Ceiling  —  best play that is theoretically possible"),
 ]
 
@@ -73,6 +74,13 @@ DESCRIPTIONS = {
                  "as you bet a bigger fraction (Kelly)? Uses a Hi-Lo counter calibrated to YOUR table "
                  "(decks, penetration, rules, shuffle) and your Bankroll units. The first run for a new "
                  "table spends ~30s calibrating, then caches it. Plot: risk-of-ruin curve."),
+    "stake": ("The operational bankroll question: betting a FIXED unit on the actual spread you set "
+              "(min/max/ramp/slope -- the same ramp Game and Heat use), how big a bankroll do you "
+              "need? Reports your win rate ($/hr and units/100), N0, DI and SCORE, and the bankroll "
+              "required to hold lifetime risk of ruin to each target (0.5%-25%), plus where YOUR roll "
+              "lands. Unlike the Bankroll experiment (idealized resizing Kelly), this models how a "
+              "counter really bets. First run for a new table calibrates (~30s), then caches. "
+              "Plots: required-bankroll curve and fixed-unit trajectories."),
     "ceiling": ("The theoretical best: a solver computes perfect play for the exact remaining cards "
                 "(no game is dealt) and shows how much it beats basic strategy. Uses Ceiling samples, "
                 "Decks, Late surrender, and Dealer-hits-soft-17. Output: tables only (no plot)."),
@@ -146,12 +154,23 @@ DEFS = {
     "heat_rate": ("Once your betting looks like counting, the chance per hand of getting backed off. "
                   "Higher = the pit acts faster once it's onto you."),
     "bankroll_units": "Starting bankroll, in betting units (1 unit = the table minimum bet).",
+    "unit_dollars": ("My-spread experiment: the dollar value of one betting unit (your table minimum), "
+                     "used to translate the win rate and required bankroll into dollars. Units are the "
+                     "real output; this is just for a $ readout."),
+    "hands_per_hour": ("My-spread experiment: rounds dealt per hour, for the win-rate-per-hour figure. "
+                       "~100 heads-up; fewer with more players at the table."),
+    "kelly_fraction": ("Live bankroll only: what fraction of the mathematically optimal (full-Kelly) bet "
+                       "to wager. 1.0 = full Kelly (fastest growth but wild swings and high risk of ruin); "
+                       "0.5 = half Kelly (the usual choice -- most of the growth, far less risk); below that "
+                       "is more conservative; above 1.0 is over-betting (growth actually falls, ruin soars). "
+                       "To see the whole trade-off curve instead of one value, run the Bankroll experiment."),
     "ceiling_samples": "How many random card situations the solver evaluates exactly. More = smoother results, but slower.",
 }
 
 PLOT_BUILDERS = {
     "Edge vs true count": (None, None),            # handled specially (all selected strategies)
     "Bankroll trajectory": (None, None),          # handled specially (line vs per-strategy fan)
+    "Required bankroll": (None, None),            # handled specially (stake_curve)
     "Result distribution": ("fig_result_hist", ("results",)),
     "Survival histogram": ("fig_survival", ("survival", "survival_cause")),
     "Heat curve": ("fig_heat_curve", ("heat",)),
@@ -189,7 +208,7 @@ def relevant_controls(exp, heat_live, bankroll_live, shuffle, strategies=()):
         if (heat_live):
             s |= heat_knobs
         if (bankroll_live):
-            s.add("bankroll_units")
+            s |= {"bankroll_units", "kelly_fraction"}
         return s
     if (exp == "heat"):
         s = base | heat_knobs | ramp_bounds | table_knobs
@@ -200,6 +219,14 @@ def relevant_controls(exp, heat_live, bankroll_live, shuffle, strategies=()):
         s = base | {"bankroll_units"} | table_knobs
         if (shuffle == "casino"):
             s |= {"shuffleRiffles", "shuffleStrips", "shuffleCut"}
+        return s
+    if (exp == "stake"):
+        s = (base | spread_knobs | table_knobs
+             | {"strategies", "bankroll_units", "unit_dollars", "hands_per_hour"})
+        if (shuffle == "casino"):
+            s |= {"shuffleRiffles", "shuffleStrips", "shuffleCut"}
+        if ("WONG" in strategies):
+            s.add("wong_below")
         return s
     if (exp == "ceiling"):
         return base | {"hitSoft17", "surrender", "decks", "ceiling_samples"}
@@ -231,6 +258,8 @@ def estimate_seconds(cfg):
         return 15.0 + (130.0 if calib_missing else 0.0)
     if (e == "bankroll"):
         return 35.0 + (130.0 if calib_missing else 0.0)
+    if (e == "stake"):
+        return 8.0 + (130.0 if calib_missing else 0.0)
     if (e == "ceiling"):
         total = cfg.ceiling_samples + 4 * max(10000, cfg.ceiling_samples // 4)
         return total / 750.0
@@ -344,9 +373,10 @@ class App:
         expbox.pack(side="top", fill="x", padx=10, pady=(10, 4))
         radios = ttk.Frame(expbox)
         radios.pack(side="top", fill="x")
-        for value, label in EXP_TAGS:
+        for k, (value, label) in enumerate(EXP_TAGS):
             ttk.Radiobutton(radios, text=label, value=value, variable=self.exp_var,
-                            command=self.on_change).pack(side="left", padx=(0, 18))
+                            command=self.on_change).grid(row=k // 2, column=k % 2,
+                                                         sticky="w", padx=(0, 24), pady=1)
         self.desc_var = tk.StringVar()
         self.desc_lbl = ttk.Label(expbox, textvariable=self.desc_var, justify="left", foreground="#333")
         self.desc_lbl.pack(side="top", fill="x", pady=(6, 0))
@@ -387,6 +417,9 @@ class App:
         self.heatwarm_var = tk.StringVar(value="25")
         self.heatrate_var = tk.StringVar(value="0.12")
         self.bunits_var = tk.StringVar(value="2000")
+        self.unitdollars_var = tk.StringVar(value="25")
+        self.handshour_var = tk.StringVar(value="100")
+        self.kelly_var = tk.StringVar(value="0.5")
         self.ceil_var = tk.StringVar(value="60000")
         self.spreadmin_var = tk.StringVar(value="1")
         self.spreadmax_var = tk.StringVar(value="20")
@@ -447,7 +480,10 @@ class App:
         row("  Heat threshold", ttk.Entry(cfgbox, textvariable=self.heatthr_var, width=14), "heat_threshold")
         row("  Heat warm-up (hands)", ttk.Entry(cfgbox, textvariable=self.heatwarm_var, width=14), "heat_warmup")
         row("  Heat detect rate", ttk.Entry(cfgbox, textvariable=self.heatrate_var, width=14), "heat_rate")
-        row("Bankroll units", ttk.Entry(cfgbox, textvariable=self.bunits_var, width=14), "bankroll_units")
+        row("  Bankroll units", ttk.Entry(cfgbox, textvariable=self.bunits_var, width=14), "bankroll_units")
+        row("  Kelly fraction", combo(self.kelly_var, ["0.1", "0.25", "0.5", "0.75", "1.0", "1.25", "1.5", "2.0"]), "kelly_fraction", "readonly")
+        row("  $ per unit", ttk.Entry(cfgbox, textvariable=self.unitdollars_var, width=14), "unit_dollars")
+        row("  Hands / hour", ttk.Entry(cfgbox, textvariable=self.handshour_var, width=14), "hands_per_hour")
         row("Ceiling samples", ttk.Entry(cfgbox, textvariable=self.ceil_var, width=14), "ceiling_samples")
 
         sweepbox = ttk.LabelFrame(left, text="2b.  Parameter sweep  (game only, optional)", padding=8)
@@ -508,6 +544,8 @@ class App:
             "heat_live": self.heatlive_var, "bankroll_live": self.bankrolllive_var,
             "heat_threshold": self.heatthr_var, "heat_warmup": self.heatwarm_var,
             "heat_rate": self.heatrate_var, "bankroll_units": self.bunits_var,
+            "kelly_fraction": self.kelly_var, "unit_dollars": self.unitdollars_var,
+            "hands_per_hour": self.handshour_var,
             "ceiling_samples": self.ceil_var, "spread_min": self.spreadmin_var,
             "spread_max": self.spreadmax_var, "ramp_start": self.rampstart_var,
             "spread_slope": self.spreadslope_var, "wong_below": self.wong_var,
@@ -556,6 +594,8 @@ class App:
             return ["Heat curve"]
         if (exp == "bankroll"):
             return ["Risk-of-ruin curve"]
+        if (exp == "stake"):
+            return ["Required bankroll", "Bankroll trajectory"]
         if (exp == "ceiling"):
             return []
         try:
@@ -661,6 +701,9 @@ class App:
             heat_warmup=int(self.heatwarm_var.get()),
             heat_rate=float(self.heatrate_var.get()),
             bankroll_units=float(self.bunits_var.get()),
+            kelly_fraction=float(self.kelly_var.get()),
+            unit_dollars=float(self.unitdollars_var.get()),
+            hands_per_hour=int(self.handshour_var.get()),
             ceiling_samples=int(self.ceil_var.get()),
         )
 
@@ -831,9 +874,16 @@ class App:
                 fig = A.fig_edge_rows_multi(rows_by) if rows_by else None
             elif (opt == "Bankroll trajectory"):
                 if (bundle.get("trajectories")):
-                    fig = A.fig_trajectory_fan(bundle["trajectories"])
+                    fig = A.fig_trajectory_fan(bundle["trajectories"],
+                                               means=bundle.get("trajectory_means"))
                 elif (bundle.get("records")):
                     fig = A.fig_bankroll(bundle["records"])
+                else:
+                    fig = None
+            elif (opt == "Required bankroll"):
+                if (bundle.get("stake_curve")):
+                    mu, sigma, B0, targets, upd = bundle["stake_curve"]
+                    fig = A.fig_required_bankroll(mu, sigma, B0, targets=targets, unit_dollars=upd)
                 else:
                     fig = None
             else:

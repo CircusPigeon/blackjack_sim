@@ -315,53 +315,58 @@ STRATEGY_COLORS = {"BASIC": "#2980b9", "COUNT": "#c0392b", "COUNTX": "#e67e22",
                    "ORACLE": "#8e44ad", "DEALER": "#7f8c8d"}
 
 
-def fig_trajectory_fan(trajectories_by_strategy, hero=None):
-    """Bankroll paths across sessions, one colour per strategy: the individual
-    sessions drawn faintly for spread, plus a bold mean line per strategy so the
-    strategies are easy to tell apart and compare. Accepts {strategy: [path, ...]}
-    or, for backward compatibility, a bare list of paths (treated as the hero's)."""
+def fig_trajectory_fan(trajectories_by_strategy, hero=None, means=None):
+    """Bankroll paths across sessions, one colour per strategy: a few individual
+    sessions drawn faintly for spread, plus a bold mean line per strategy. If `means`
+    is given ({strategy: per-hand mean over ALL trials}), the bold line uses it -- the
+    faint paths are only a sample, so a mean drawn from them alone would be noise for a
+    low-edge strategy (e.g. WONG). Without it the mean falls back to the sample paths.
+    Accepts {strategy: [path, ...]} or a bare list of paths (treated as the hero's)."""
     import numpy as np
     import matplotlib.lines as mlines
     if (isinstance(trajectories_by_strategy, list)):
         trajectories_by_strategy = {hero or "hero": trajectories_by_strategy}
+    means = means or {}
     fig = _new_figure()
     if (fig is None or not trajectories_by_strategy):
         return None
     ax = fig.add_subplot(111)
     base, handles, n = None, [], 0
+
+    def _down(seq):                                  # thin a long series for snappy drawing
+        if (len(seq) > 2000):
+            step = len(seq) // 2000
+            return list(range(0, len(seq), step)), np.asarray(seq)[::step]
+        return list(range(len(seq))), np.asarray(seq)
+
     for s, paths in trajectories_by_strategy.items():
         if (not paths):
             continue
         c = STRATEGY_COLORS.get(s, "#2980b9")
         for traj in paths:                           # faint individual sessions (the spread)
-            if (len(traj) > 2000):
-                step = len(traj) // 2000
-                xs, ys = list(range(0, len(traj), step)), traj[::step]
-            else:
-                xs, ys = list(range(len(traj))), traj
+            xs, ys = _down(traj)
             ax.plot(xs, ys, color=c, lw=0.5, alpha=0.12)
-            if (base is None and traj):
+            if (base is None and len(traj)):
                 base = traj[0]
             n += 1
-        # bold mean line: pad ended sessions forward at their final balance, then average
-        L = max(len(p) for p in paths)
-        arr = np.empty((len(paths), L))
-        for i, p in enumerate(paths):
-            arr[i, :len(p)] = p
-            if (len(p) < L):
-                arr[i, len(p):] = p[-1]
-        mean = arr.mean(axis=0)
-        mx = list(range(L))
-        if (L > 2000):
-            stp = L // 2000
-            mx, mean = list(range(0, L, stp)), mean[::stp]
-        ax.plot(mx, mean, color=c, lw=2.6, solid_capstyle="round")
+        mseq = means.get(s)
+        if (mseq is None or not len(mseq)):          # fall back to the sample-path mean
+            L = max(len(p) for p in paths)
+            arr = np.empty((len(paths), L))
+            for i, p in enumerate(paths):
+                arr[i, :len(p)] = p
+                if (len(p) < L):
+                    arr[i, len(p):] = p[-1]
+            mseq = arr.mean(axis=0)
+        mx, my = _down(mseq)
+        ax.plot(mx, my, color=c, lw=2.6, solid_capstyle="round", zorder=4)
         handles.append(mlines.Line2D([], [], color=c, lw=2.6, label=s))
     if (not handles):
         return None
     if (base is not None):
         ax.axhline(base, color="0.45", lw=0.9, zorder=0)
-    _style(ax, "Bankroll over time across %d sessions  (bold = mean)" % n, "hand number", "bankroll")
+    note = "bold = mean of all trials" if means else "bold = mean"
+    _style(ax, "Bankroll over time  (%d sample sessions; %s)" % (n, note), "hand number", "bankroll")
     ax.legend(handles=handles, fontsize=11)
     return fig
 
@@ -421,6 +426,37 @@ def fig_risk_curve(rows):
     ax2.plot(fr, growth, "s--", color="#27ae60")
     ax2.set_ylabel("median bankroll growth (x)", color="#27ae60", fontsize=12)
     ax2.tick_params(labelsize=11)
+    return fig
+
+
+def fig_required_bankroll(mu, sigma, B0, targets=(0.005, 0.01, 0.05, 0.135, 0.25), unit_dollars=None):
+    """Lifetime risk of ruin vs bankroll for a fixed-unit spread (mu, sigma in units
+    per hand). The curve is RoR = exp(-2*mu*B/sigma^2); each target RoR is marked at
+    the bankroll it needs, and the player's own roll is marked with its resulting RoR."""
+    import math
+    import numpy as np
+    fig = _new_figure()
+    if (fig is None or mu <= 0 or sigma <= 0):
+        return None
+    ax = fig.add_subplot(111)
+    need = lambda q: math.log(1.0 / q) * sigma * sigma / (2.0 * mu)
+    bmax = max(B0 * 1.3, need(min(targets)) * 1.15, 1.0)
+    xs = np.linspace(1.0, bmax, 400)
+    ax.plot(xs, np.exp(-2.0 * mu * xs / (sigma * sigma)) * 100, color="#c0392b", lw=2.2)
+    for q in targets:
+        b = need(q)
+        if (b <= bmax):
+            ax.scatter([b], [q * 100], color="#c0392b", zorder=5, edgecolor="black", s=70)
+            ax.annotate("  %.1f%%  (%s u)" % (q * 100, format(round(b), ",")),
+                        (b, q * 100), fontsize=9, va="bottom")
+    cur = math.exp(-2.0 * mu * B0 / (sigma * sigma)) * 100
+    ax.axvline(B0, color="#2980b9", ls="--", lw=1.4)
+    ax.annotate("your roll: %s u\n-> RoR %.1f%%" % (format(round(B0), ","), cur),
+                (B0, 60), color="#2980b9", fontsize=9, ha="center",
+                bbox=dict(boxstyle="round", fc="white", ec="#2980b9", alpha=0.85))
+    _style(ax, "How big a bankroll your spread needs", "bankroll (units)", "lifetime risk of ruin %")
+    ax.set_ylim(0, 100)
+    ax.set_xlim(0, bmax)
     return fig
 
 

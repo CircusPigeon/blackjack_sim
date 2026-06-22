@@ -73,9 +73,11 @@ def run(config, outdir="results", save_plots=True, cancel=None, progress=None):
         return _run_heat(config, outdir, save_plots, cancel, progress)
     if (kind == "bankroll"):
         return _run_bankroll(config, outdir, save_plots, cancel, progress)
+    if (kind == "stake"):
+        return _run_stake(config, outdir, save_plots, cancel, progress)
     if (kind == "ceiling"):
         return _run_ceiling(config, outdir, save_plots, cancel)
-    raise ValueError("unknown experiment '" + str(kind) + "' (game|heat|bankroll|ceiling)")
+    raise ValueError("unknown experiment '" + str(kind) + "' (game|heat|bankroll|stake|ceiling)")
 
 
 def _fmt(e):
@@ -160,7 +162,15 @@ def _run_game_trials(config, outdir, save_plots=True, cancel=None, progress=None
     agg = {s: {"hands": [], "profit": [], "wagered": 0.0,
                "ruined": 0, "barred": 0, "unit": 10.0} for s in tracked}
     edge_acc = {}                                       # pooled edge-by-true-count
-    trajectories = {s: [] for s in tracked}             # balance paths per strategy (first few)
+    trajectories = {s: [] for s in tracked}             # a few faint sample paths per strategy
+    # The bold mean line is accumulated over ALL trials (not just the sampled paths),
+    # so it is trustworthy even for low-edge/high-variance strategies (e.g. WONG),
+    # whose 40-session mean would otherwise be pure noise. Ended sessions are carried
+    # forward at their final balance (msum holds the running sum per hand index;
+    # mfinal_sum lets a longer later trial back-fill the shorter earlier ones).
+    msum = {s: np.zeros(0) for s in tracked}
+    mfinal_sum = {s: 0.0 for s in tracked}
+    n_traj = {s: 0 for s in tracked}
     for t in range(config.trials):
         if (cancel is not None):
             cancel()
@@ -173,16 +183,27 @@ def _run_game_trials(config, outdir, save_plots=True, cancel=None, progress=None
             if (all(g.out for g in game.guests)):     # nobody left to simulate
                 break
         A.accumulate_edge(game.records, edge_acc)      # fold this trial in, then drop it
-        if (any(len(trajectories[s]) < 40 for s in tracked)):
-            rec = game.records
-            paths = {s: [] for s in tracked}
-            for i in range(len(rec["round"])):
-                s = rec["strategy"][i]
-                if (s in paths):
-                    paths[s].append(rec["bankroll"][i])
-            for s in tracked:
-                if (len(trajectories[s]) < 40 and paths[s]):
-                    trajectories[s].append(paths[s])
+        rec = game.records
+        paths = {s: [] for s in tracked}
+        for i in range(len(rec["round"])):
+            s = rec["strategy"][i]
+            if (s in paths):
+                paths[s].append(rec["bankroll"][i])
+        for s in tracked:
+            p = paths[s]
+            if (not p):
+                continue
+            if (len(trajectories[s]) < 40):
+                trajectories[s].append(p)               # keep a few for the faint background
+            arr = np.asarray(p, dtype=float)            # fold every trial into the mean
+            Lp, f, Lg = len(arr), float(arr[-1]), len(msum[s])
+            if (Lp > Lg):                               # this trial is longer: back-fill the rest
+                msum[s] = np.concatenate([msum[s], np.full(Lp - Lg, mfinal_sum[s])])
+            msum[s][:Lp] += arr
+            if (Lp < len(msum[s])):                     # this trial ended early: hold its final
+                msum[s][Lp:] += f
+            mfinal_sum[s] += f
+            n_traj[s] += 1
         for g in game.guests:
             a = agg[g.strategy]
             a["hands"].append(g.handsPlayed)
@@ -232,8 +253,10 @@ def _run_game_trials(config, outdir, save_plots=True, cancel=None, progress=None
     if (save_plots):
         A.plot_survival_hist(survival, os.path.join(outdir, config.label + "_survival.png"))
         print("Wrote results/" + config.label + "_survival.png")
+    traj_means = {s: msum[s] / n_traj[s] for s in tracked if (n_traj[s] and len(msum[s]))}
     return {"trials": agg, "survival": survival, "survival_cause": cause, "results": results,
-            "edge_rows": edge_rows, "hero": hero, "trajectories": trajectories}
+            "edge_rows": edge_rows, "hero": hero, "trajectories": trajectories,
+            "trajectory_means": traj_means}
 
 
 def _run_heat(config, outdir, save_plots=True, cancel=None, progress=None):
@@ -274,6 +297,74 @@ def _run_bankroll(config, outdir, save_plots=True, cancel=None, progress=None):
     if (save_plots):
         A.plot_risk_curve(rows, os.path.join(outdir, "risk_vs_kelly.png"))
     return {"risk": rows}
+
+
+def _run_stake(config, outdir, save_plots=True, cancel=None, progress=None):
+    """Operational bankroll / risk of ruin for the *actual* discrete spread the
+    counter plays (the same ramp Game and Heat use), bet at a fixed unit. Reports
+    win rate, N0, DI / SCORE, the lifetime risk of ruin for the chosen bankroll, and
+    -- the number a counter really wants -- the bankroll required to hold RoR to each
+    target. Uses the cached per-unit calibration for the table (no re-dealing)."""
+    import bankroll
+    calib = _calibration(config, cancel, progress)
+    wb = config.wong_below if ("WONG" in config.strategies) else None
+    st = bankroll.spread_stats(calib, config.spread_min, config.spread_max,
+                               config.ramp_start, config.spread_slope, wb)
+    mu, sigma = st["mu"], st["sigma"]
+    upd, hph, B0 = config.unit_dollars, config.hands_per_hour, config.bankroll_units
+    print("[my spread] %g-%g units, ramp from TC %g at %g u/TC%s | %d-deck, pen %g, %s"
+          % (config.spread_min, config.spread_max, config.ramp_start, config.spread_slope,
+             (" | Wong < %g" % wb) if wb is not None else "", config.numPacks,
+             config.penetration, "H17" if config.hitSoft17 else "S17"))
+    if (mu <= 0):
+        print("\nThis spread has no edge (EV per hand %+.4f units <= 0): no bankroll makes it "
+              "safe -- widen the spread, deepen penetration, or find a better game." % mu)
+        return {"stake": st}
+
+    print("\nWin rate and variance (1 unit = the table minimum):")
+    A.print_table([
+        ("EV per hand", "%+.4f u" % mu, "$%+.2f" % (mu * upd)),
+        ("win rate / 100 hands", "%+.2f u" % (mu * 100), "$%+.0f" % (mu * 100 * upd)),
+        ("win rate / hour (%d hands)" % hph, "%+.2f u" % (mu * hph), "$%+.0f" % (mu * hph * upd)),
+        ("average bet", "%.2f u" % st["avg_bet"], "$%.0f" % (st["avg_bet"] * upd)),
+        ("edge per unit wagered", "%.3f%%" % (st["edge_bw"] * 100), ""),
+        ("SD per hand", "%.2f u" % sigma, "$%.0f" % (sigma * upd)),
+    ], ["metric", "value", "at $%g/unit" % upd])
+
+    print("\nEfficiency (the figures that rank one game/spread against another):")
+    A.print_table([
+        ("N0  (hands until the win = 1 SD)", format(round(st["n0"]), ",")),
+        ("DI  (desirability index, 1000*EV/SD)", "%.1f" % st["di"]),
+        ("SCORE  ($/100 hands per $10k roll @ 13.5% RoR)", format(round(st["score"]), ",")),
+    ], ["metric", "value"])
+
+    print("\nBankroll your spread needs (fixed unit, lifetime risk of ruin):")
+    rows = []
+    for q in (0.005, 0.01, 0.05, 0.135, 0.25):
+        b = bankroll.bankroll_for_ror(q, mu, sigma)
+        rows.append(("%.1f%%" % (q * 100), format(round(b), ","), "$" + format(round(b * upd), ",")))
+    A.print_table(rows, ["risk of ruin", "bankroll (units)", "bankroll ($)"])
+    cur = bankroll.lifetime_ror(B0, mu, sigma)
+    print("\nYour bankroll of %s units ($%s) -> lifetime risk of ruin %.1f%%."
+          % (format(round(B0), ","), format(round(B0 * upd), ","), cur * 100))
+
+    # finite-horizon Monte-Carlo: a sanity check on the formula + paths to plot
+    sim = bankroll.simulate_fixed_unit(calib, config.spread_min, config.spread_max,
+                                       config.ramp_start, config.spread_slope, wb, B0=B0,
+                                       maxHands=config.bankroll_horizon, M=8000,
+                                       seed=config.seed, record_traj=120)
+    print("(%s-hand Monte-Carlo check: %.1f%% of trips busted within the horizon.)"
+          % (format(config.bankroll_horizon, ","), sim["ror"] * 100))
+
+    bundle = {"stake": st, "stake_curve": (mu, sigma, B0, (0.005, 0.01, 0.05, 0.135, 0.25), upd)}
+    if (sim["traj"] is not None):
+        bundle["trajectories"] = {"COUNT": [list(p) for p in sim["traj"]]}
+    if (save_plots):
+        fig = A.fig_required_bankroll(mu, sigma, B0, unit_dollars=upd)
+        if (fig is not None):
+            fig.savefig(os.path.join(outdir, config.label + "_required_bankroll.png"),
+                        dpi=120, bbox_inches="tight")
+    return bundle
 
 
 def _run_ceiling(config, outdir, save_plots=True, cancel=None):

@@ -2,7 +2,7 @@
 
     python main.py <experiment> [field=value ...]
 
-experiments: game | heat | bankroll | ceiling
+experiments: game | heat | bankroll | stake | ceiling
 
 examples:
     python main.py game
@@ -20,7 +20,7 @@ import sys
 from config import Config
 import experiment
 
-EXPERIMENTS = ("game", "heat", "bankroll", "ceiling")
+EXPERIMENTS = ("game", "heat", "bankroll", "stake", "ceiling")
 
 
 def _coerce(value):

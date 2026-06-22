@@ -47,7 +47,7 @@ class Config:
     dummyPlayers: int = 0
     dummyStrategy: str = "BASIC"
 
-    # which experiment run() performs: game | heat | bankroll | ceiling
+    # which experiment run() performs: game | heat | bankroll | stake | ceiling
     experiment: str = "game"
 
     # heat (detection): the pit watches your bet-vs-count ramp slope
@@ -61,6 +61,8 @@ class Config:
     bankroll_units: float = 2000.0    # starting bankroll, in betting units
     ruin_frac: float = 0.5            # ruin = bankroll falls to this fraction of start
     bankroll_horizon: int = 50000     # hands per simulated trip (bankroll experiment)
+    unit_dollars: float = 25.0        # $ value of one betting unit (table minimum), for the 'stake' experiment
+    hands_per_hour: int = 100         # rounds dealt per hour, for the win-rate-per-hour figure
 
     # live composition: apply heat / bankroll to counting heroes inside a game run
     heat_live: bool = False           # casino watches the hero's bet/count slope
