@@ -285,9 +285,9 @@ def fig_bankroll(records):
         series[s][0].append(records["round"][i])
         series[s][1].append(records["bankroll"][i])
     for s in series:
-        ax.plot(series[s][0], series[s][1], lw=0.9, label=s)
+        ax.plot(series[s][0], series[s][1], lw=1.3, color=STRATEGY_COLORS.get(s), label=s)
     ax.axhline(0, color="0.5", lw=0.8)
-    _style(ax, "Bankroll over time", "hand number", "bankroll")
+    _style(ax, "Bankroll over time", "hand number", "cumulative result")
     ax.legend(fontsize=11)
     return fig
 
@@ -309,15 +309,18 @@ def fig_survival(hands_by_strategy, cause="leaving the table"):
     return fig
 
 
+# Distinct qualitative palette so overlaid strategies are easy to tell apart.
 STRATEGY_COLORS = {"BASIC": "#2980b9", "COUNT": "#c0392b", "COUNTX": "#e67e22",
-                   "COUNT0": "#d35400", "WONG": "#16a085", "TRACK": "#27ae60",
+                   "COUNT0": "#f1c40f", "WONG": "#16a085", "TRACK": "#27ae60",
                    "ORACLE": "#8e44ad", "DEALER": "#7f8c8d"}
 
 
 def fig_trajectory_fan(trajectories_by_strategy, hero=None):
-    """Bankroll paths across sessions, one colour per strategy. Accepts a dict
-    {strategy: [path, ...]} (the multi-strategy form) or, for backward
-    compatibility, a bare list of paths (treated as the hero's)."""
+    """Bankroll paths across sessions, one colour per strategy: the individual
+    sessions drawn faintly for spread, plus a bold mean line per strategy so the
+    strategies are easy to tell apart and compare. Accepts {strategy: [path, ...]}
+    or, for backward compatibility, a bare list of paths (treated as the hero's)."""
+    import numpy as np
     import matplotlib.lines as mlines
     if (isinstance(trajectories_by_strategy, list)):
         trajectories_by_strategy = {hero or "hero": trajectories_by_strategy}
@@ -330,22 +333,35 @@ def fig_trajectory_fan(trajectories_by_strategy, hero=None):
         if (not paths):
             continue
         c = STRATEGY_COLORS.get(s, "#2980b9")
-        for traj in paths:
-            if (len(traj) > 2000):                   # downsample long paths to stay snappy
+        for traj in paths:                           # faint individual sessions (the spread)
+            if (len(traj) > 2000):
                 step = len(traj) // 2000
                 xs, ys = list(range(0, len(traj), step)), traj[::step]
             else:
                 xs, ys = list(range(len(traj))), traj
-            ax.plot(xs, ys, color=c, lw=0.6, alpha=0.28)
+            ax.plot(xs, ys, color=c, lw=0.5, alpha=0.12)
             if (base is None and traj):
                 base = traj[0]
             n += 1
-        handles.append(mlines.Line2D([], [], color=c, lw=2, label=s))
+        # bold mean line: pad ended sessions forward at their final balance, then average
+        L = max(len(p) for p in paths)
+        arr = np.empty((len(paths), L))
+        for i, p in enumerate(paths):
+            arr[i, :len(p)] = p
+            if (len(p) < L):
+                arr[i, len(p):] = p[-1]
+        mean = arr.mean(axis=0)
+        mx = list(range(L))
+        if (L > 2000):
+            stp = L // 2000
+            mx, mean = list(range(0, L, stp)), mean[::stp]
+        ax.plot(mx, mean, color=c, lw=2.6, solid_capstyle="round")
+        handles.append(mlines.Line2D([], [], color=c, lw=2.6, label=s))
     if (not handles):
         return None
     if (base is not None):
-        ax.axhline(base, color="0.4", lw=0.9)
-    _style(ax, "Bankroll over time across %d sessions" % n, "hand number", "bankroll")
+        ax.axhline(base, color="0.45", lw=0.9, zorder=0)
+    _style(ax, "Bankroll over time across %d sessions  (bold = mean)" % n, "hand number", "bankroll")
     ax.legend(handles=handles, fontsize=11)
     return fig
 

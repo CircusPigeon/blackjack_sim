@@ -36,6 +36,7 @@ from config import Config
 import experiment
 
 OUTDIR = "results"
+SETTINGS_PATH = os.path.join(OUTDIR, "gui_settings.json")
 FONT_PT = 10
 STRATEGIES = ["BASIC", "COUNT", "COUNT0", "COUNTX", "WONG", "DEALER", "TRACK",
               "ORACLE", "HIOPT2", "ZEN", "OMEGA2"]
@@ -488,7 +489,63 @@ class App:
         self.shuffle_var.trace_add("write", lambda *a: self.on_change())
         root.bind_all("<MouseWheel>", self._on_wheel)
 
+        self._load_settings()                       # restore last session's choices, if any
         self.on_change()
+        root.protocol("WM_DELETE_WINDOW", self.on_close)
+
+    # --- settings persistence ---
+    def _setting_vars(self):
+        """The config inputs persisted between sessions (scalar vars; strategies are
+        handled separately). Plot checkboxes are intentionally left out -- they are
+        recomputed reactively from the experiment / trials each time."""
+        return {
+            "experiment": self.exp_var, "label": self.label_var,
+            "shuffle": self.shuffle_var, "riffles": self.riffles_var,
+            "strips": self.strips_var, "cut": self.cut_var, "packs": self.packs_var,
+            "pen": self.pen_var, "bjp": self.bjp_var, "h17": self.h17_var,
+            "surrender": self.surr_var, "das": self.das_var, "dummies": self.dummies_var,
+            "rounds": self.rounds_var, "seed": self.seed_var, "trials": self.trials_var,
+            "heat_live": self.heatlive_var, "bankroll_live": self.bankrolllive_var,
+            "heat_threshold": self.heatthr_var, "heat_warmup": self.heatwarm_var,
+            "heat_rate": self.heatrate_var, "bankroll_units": self.bunits_var,
+            "ceiling_samples": self.ceil_var, "spread_min": self.spreadmin_var,
+            "spread_max": self.spreadmax_var, "ramp_start": self.rampstart_var,
+            "spread_slope": self.spreadslope_var, "wong_below": self.wong_var,
+            "sweep": self.sweep_var, "sweep_values": self.sweepvals_var,
+            "save_plots": self.saveplots_var,
+        }
+
+    def _save_settings(self):
+        import json
+        data = {k: v.get() for k, v in self._setting_vars().items()}
+        data["strategies"] = {s: var.get() for s, var in self.strat_vars.items()}
+        try:
+            os.makedirs(OUTDIR, exist_ok=True)
+            with open(SETTINGS_PATH, "w") as f:
+                json.dump(data, f, indent=2)
+        except OSError:
+            pass
+
+    def _load_settings(self):
+        import json
+        try:
+            with open(SETTINGS_PATH) as f:
+                data = json.load(f)
+        except (OSError, ValueError):
+            return
+        for k, v in self._setting_vars().items():       # "sweep" before "sweep_values" so its
+            if (k in data):                              # trace reset is then overwritten by the saved value
+                try:
+                    v.set(data[k])
+                except tk.TclError:
+                    pass
+        for s, on in (data.get("strategies") or {}).items():
+            if (s in self.strat_vars):
+                self.strat_vars[s].set(bool(on))
+
+    def on_close(self):
+        self._save_settings()
+        self.root.destroy()
 
     # --- reactive UI ---
     def available_plots(self):
